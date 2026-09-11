@@ -13,7 +13,6 @@ from aiogram.types import CallbackQuery, Message
 
 from app import texts, views
 from app.callbacks import AdminCB
-from app.config import Config
 from app.constants import (
     DAY,
     DEFAULT_SETTINGS,

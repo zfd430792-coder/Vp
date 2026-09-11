@@ -30,6 +30,10 @@ class Edit(StatesGroup):
     age_filter = State()
 
 
+class Like(StatesGroup):
+    note = State()
+
+
 class Report(StatesGroup):
     comment = State()
 

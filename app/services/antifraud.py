@@ -87,7 +87,7 @@ class ActionTracker:
 
     def intervals(self, user_id: int, count: int = 10) -> list[float]:
         events = list(self._actions.get(user_id, ()))[-count:]
-        return [round(b[0] - a[0], 3) for a, b in zip(events, events[1:])]
+        return [round(b[0] - a[0], 3) for a, b in zip(events, events[1:], strict=False)]
 
     def is_inhuman(self, user_id: int) -> bool:
         """Слишком ровный и быстрый темп — почти наверняка скрипт."""
@@ -163,9 +163,7 @@ async def needs_captcha(db: Database, settings: Settings, user: dict[str, Any]) 
     if not user.get("username") and int(user.get("trust_score") or 50) < 50:
         return True
 
-    if await risk_score(db, int(user["id"])) >= 20:
-        return True
-    return False
+    return await risk_score(db, int(user["id"])) >= 20
 
 
 # --------------------------------------------------------------------------- содержимое анкеты

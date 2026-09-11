@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Awaitable, Callable
+from contextlib import suppress
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.fsm.context import FSMContext
@@ -68,9 +70,8 @@ class UserMiddleware(BaseMiddleware):
 
     async def _appeal_allowed(self, event: TelegramObject, data: dict[str, Any]) -> bool:
         """Заблокированный пользователь может только написать апелляцию."""
-        if isinstance(event, CallbackQuery) and event.data:
-            if event.data.startswith("st:appeal"):
-                return True
+        if isinstance(event, CallbackQuery) and event.data and event.data.startswith("st:appeal"):
+            return True
         state: FSMContext | None = data.get("state")
         if state is not None and isinstance(event, Message):
             current = await state.get_state()
@@ -99,15 +100,12 @@ class UserMiddleware(BaseMiddleware):
             until=until_line,
         )
         markup = inline.appeal_button()
+        # Уведомление не критично: если Telegram его не примет, просто идём дальше
         if isinstance(event, CallbackQuery):
             await event.answer("Доступ ограничен", show_alert=False)
             if event.message is not None:
-                try:
+                with suppress(Exception):
                     await event.message.answer(text, reply_markup=markup)
-                except Exception:  # noqa: BLE001 - уведомление не критично
-                    pass
         elif isinstance(event, Message):
-            try:
+            with suppress(Exception):
                 await event.answer(text, reply_markup=markup)
-            except Exception:  # noqa: BLE001
-                pass

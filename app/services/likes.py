@@ -126,6 +126,7 @@ _INCOMING_FILTER = """
        AND l.action IN ('like', 'superlike')
        AND l.responded = 0
        AND p.is_complete = 1
+       AND p.moderation IN ('ok', 'review')
        AND u.status = :status_active
        AND u.ban_permanent = 0
        AND (u.ban_until IS NULL OR u.ban_until <= :now)

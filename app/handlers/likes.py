@@ -19,7 +19,6 @@ from app.services import likes as likes_service
 from app.services import notify
 from app.services import profiles as profiles_service
 from app.services import render
-from app.services.settings import Settings
 
 router = Router(name="likes")
 
@@ -77,7 +76,7 @@ async def open_likes(
     db: Database,
     user: dict[str, Any],
 ) -> None:
-    await state.set_state(None)
+    await ui.leave_chat_mode(state, int(user["id"]))
     profile = await ui.require_profile(bot, db, message.chat.id, user)
     if not profile:
         return

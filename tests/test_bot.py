@@ -24,6 +24,8 @@ FAILED: list[str] = []
 ALICE = 100
 BORIS = 200
 CARL = 300
+DINA = 400
+NEWBIE = 500
 OWNER = 1
 
 
@@ -373,6 +375,89 @@ async def main() -> None:
     session.clear()
     await harness.send(ALICE, "что-то непонятное")
     check("бот не молчит на непонятное", has(session, "Выбери действие", ALICE))
+
+    print("\n▶ Суперлайк с сообщением")
+    await register(harness, DINA, name="Дина", age=26, gender="f", seeking="m")
+    session.clear()
+    await harness.send(BORIS, "🔍 Смотреть анкеты")
+    await harness.click(BORIS, f"fd:super:{DINA}")
+    check("суперлайк отправлен", any("💥" in a for a in session.alerts()))
+    check("предложено добавить сообщение", has(session, "Хочешь добавить пару слов", BORIS))
+    check("кнопка записки есть", f"fd:note:{DINA}" in session.all_buttons(BORIS))
+    check("получателю пришло уведомление", has(session, "отправили суперлайк", DINA))
+
+    session.clear()
+    await harness.click(BORIS, f"fd:note:{DINA}")
+    await harness.send(BORIS, "Пиши мне в телеграм @boris_real")
+    check("контакты в записке запрещены", has(session, "отправлять нельзя", BORIS))
+    await harness.send(BORIS, "Заметил, что ты тоже любишь горы — какой маршрут последний?")
+    check("записка сохранена", has(session, "Сообщение добавлено", BORIS))
+    like_row = await likes_service.existing(db, BORIS, DINA)
+    check("записка в базе", bool(like_row) and "горы" in str(like_row["message"]))
+
+    session.clear()
+    await harness.send(DINA, "💌 Мои лайки")
+    check("получатель видит суперлайк", has(session, "суперлайк", DINA))
+    check("получатель видит записку", has(session, "какой маршрут", DINA))
+
+    print("\n▶ Скрытая модератором анкета не достаёт людей")
+    check("до скрытия лайк виден", await likes_service.incoming_count(db, DINA) == 1)
+    session.clear()
+    await harness.click(OWNER, f"ad:hold:{BORIS}:0:")
+    check("анкета скрыта модератором", has(session, "скрыта из поиска", BORIS))
+    left = await likes_service.incoming_count(db, DINA)
+    check("лайк скрытой анкеты не показывается", left == 0, f"осталось {left}")
+
+    session.clear()
+    await harness.click(OWNER, f"ad:mod_ok:{BORIS}:0:")
+    check("после одобрения анкета вернулась", has(session, "снова в поиске", BORIS))
+    check("и лайк стал виден", await likes_service.incoming_count(db, DINA) == 1)
+
+    print("\n▶ Продолжение прерванной анкеты")
+    session.clear()
+    await harness.click(OWNER, f"ad:wipe_photos:{BORIS}:0:")
+    check("фото удалены модератором", await profiles.count_photos(db, BORIS) == 0)
+    check("человеку объяснили причину", has(session, "Фотографии удалены модератором", BORIS))
+
+    session.clear()
+    await harness.send(BORIS, "/start")
+    check("бот просит только фото", has(session, "не хватает фотографии", BORIS))
+    check("заново имя не спрашивают", not has(session, "Шаг 1/7", BORIS))
+    await harness.send(BORIS, "", photo="boris_new")
+    session.clear()
+    await harness.click(BORIS, "reg:photos_done:")
+    await harness.click(BORIS, "reg:publish:")
+    restored = await profiles.get(db, BORIS)
+    check("анкета восстановлена", bool(restored["is_complete"]))
+    check("имя сохранилось", restored["name"] == "Борис", str(restored["name"]))
+    check("город сохранился", restored["city"] == "Москва", str(restored["city"]))
+
+    print("\n▶ Капча против ботоферм")
+    await settings.set("reg_burst_limit", "1")
+    session.clear()
+    await harness.send(NEWBIE, "/start")
+    await harness.click(NEWBIE, "reg:rules_ok:")
+    check("капча показана", has(session, "Быстрая проверка", NEWBIE))
+
+    captcha_text = next(t for t in session.texts(NEWBIE) if "Быстрая проверка" in t)
+    symbol = captcha_text.split("<b>")[-1].split("</b>")[0]
+    options = [b for b in session.buttons(NEWBIE) if b.startswith("cap:")]
+    wrong = next(b for b in options if b.split(":")[1] != symbol)
+    right = next(b for b in options if b.split(":")[1] == symbol)
+
+    session.clear()
+    await harness.click(NEWBIE, wrong)
+    check("неверный ответ не пропускает", any("Не тот символ" in a for a in session.alerts()))
+
+    captcha_text = next(t for t in session.texts(NEWBIE) if "Быстрая проверка" in t)
+    symbol = captcha_text.split("<b>")[-1].split("</b>")[0]
+    right = next(b for b in session.buttons(NEWBIE) if b.startswith("cap:") and b.split(":")[1] == symbol)
+
+    session.clear()
+    await harness.click(NEWBIE, right)
+    check("верный ответ пропускает дальше", has(session, "Шаг 1/7", NEWBIE))
+    check("капча отмечена пройденной", bool((await users.get(db, NEWBIE))["captcha_passed"]))
+    await settings.set("reg_burst_limit", "12")
 
     print("\n▶ Удаление анкеты")
     session.clear()

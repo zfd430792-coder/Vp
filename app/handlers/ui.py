@@ -5,7 +5,6 @@ from typing import Any
 
 from aiogram import Bot
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardMarkup
 
 from app import texts
 from app.constants import ROLE_MODERATOR
@@ -26,14 +25,12 @@ UI_MESSAGES_KEY = "ui_msgs"
 
 
 async def leave_chat_mode(state: FSMContext, user_id: int) -> None:
-    """Если человек ушёл из диалога кнопкой ленты — закрываем диалог аккуратно."""
+    """Выход в обычный режим: закрывает открытый диалог и сбрасывает состояние."""
     from app.services import chat as chat_service
-    from app.states import Chat
 
-    if await state.get_state() == Chat.chatting.state:
-        chat_service.close_chat(user_id)
-        await state.set_state(None)
-        await state.update_data(chat_match=0, chat_partner=0)
+    chat_service.close_chat(user_id)
+    await state.set_state(None)
+    await state.update_data(chat_match=0, chat_partner=0)
 
 
 async def clear_ui(bot: Bot, state: FSMContext, chat_id: int) -> None:

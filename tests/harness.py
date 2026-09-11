@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import itertools
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator
+from typing import Any
+from collections.abc import AsyncGenerator
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -97,7 +98,7 @@ class MockSession(BaseSession):
 
     def buttons(self, chat_id: int | None = None) -> list[str]:
         """Все callback_data последней клавиатуры."""
-        for name, payload in reversed(self.calls):
+        for _name, payload in reversed(self.calls):
             if chat_id is not None and payload.get("chat_id") != chat_id:
                 continue
             markup = payload.get("reply_markup")
@@ -110,6 +111,23 @@ class MockSession(BaseSession):
                 if button.get("callback_data")
             ]
         return []
+
+    def all_buttons(self, chat_id: int | None = None) -> list[str]:
+        """Все callback_data из всех клавиатур, отправленных с момента clear()."""
+        found: list[str] = []
+        for _name, payload in self.calls:
+            if chat_id is not None and payload.get("chat_id") != chat_id:
+                continue
+            markup = payload.get("reply_markup")
+            if not markup or "inline_keyboard" not in markup:
+                continue
+            found.extend(
+                button["callback_data"]
+                for row in markup["inline_keyboard"]
+                for button in row
+                if button.get("callback_data")
+            )
+        return found
 
     def alerts(self) -> list[str]:
         """Тексты всплывающих ответов на нажатия кнопок."""

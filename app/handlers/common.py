@@ -12,7 +12,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app import texts
 from app.callbacks import CaptchaCB, RegCB
-from app.constants import DAY, HOUR
+from app.constants import HOUR
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline, reply
@@ -71,6 +71,18 @@ async def start_registration(
     if await antifraud.needs_captcha(db, settings, user):
         await send_captcha(message, state)
         return
+    await begin_profile(message, state, db, user)
+
+
+async def begin_profile(
+    message: Message, state: FSMContext, db: Database, user: dict[str, Any]
+) -> None:
+    """Продолжает незаконченную анкету или начинает новую."""
+    from app.handlers.registration import resume
+
+    profile = await profiles_service.get(db, int(user["id"]))
+    if profile and await resume(message, state, db, profile):
+        return
     await state.set_state(Reg.name)
     await message.answer(texts.REG_INTRO, reply_markup=reply.remove)
     await message.answer(texts.ASK_NAME)
@@ -86,7 +98,7 @@ async def cmd_start(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    await state.clear()
+    await ui.leave_chat_mode(state, int(user["id"]))
 
     payload = (command.args or "").strip() if command else ""
     if payload and not user.get("source"):
@@ -207,9 +219,7 @@ async def check_captcha(
         await query.answer(texts.CAPTCHA_OK)
         if query.message:
             await query.message.edit_text(texts.CAPTCHA_OK)
-            await state.set_state(Reg.name)
-            await query.message.answer(texts.REG_INTRO, reply_markup=reply.remove)
-            await query.message.answer(texts.ASK_NAME)
+            await begin_profile(query.message, state, db, user)
         return
 
     tries = int(data.get("captcha_tries") or 0) + 1
@@ -265,8 +275,10 @@ async def cmd_safety(message: Message) -> None:
 
 
 @router.message(Command("menu"))
-async def cmd_menu(message: Message, bot: Bot, db: Database, user: dict[str, Any], state: FSMContext) -> None:
-    await state.clear()
+async def cmd_menu(
+    message: Message, bot: Bot, db: Database, user: dict[str, Any], state: FSMContext
+) -> None:
+    await ui.leave_chat_mode(state, int(user["id"]))
     await ui.show_menu(bot, db, message.chat.id, user)
 
 
@@ -276,7 +288,7 @@ async def cmd_cancel(
     message: Message, bot: Bot, state: FSMContext, db: Database, user: dict[str, Any]
 ) -> None:
     current = await state.get_state()
-    await state.clear()
+    await ui.leave_chat_mode(state, int(user["id"]))
     if current is None:
         await ui.show_menu(bot, db, message.chat.id, user)
         return

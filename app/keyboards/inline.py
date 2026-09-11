@@ -1,7 +1,8 @@
 """Инлайн-клавиатуры."""
 from __future__ import annotations
 
-from typing import Any, Iterable, Sequence
+from typing import Any
+from collections.abc import Iterable, Sequence
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -17,7 +18,7 @@ from app.callbacks import (
     ReportCB,
     SettingsCB,
 )
-from app.constants import GENDERS, INTERESTS, REPORT_CATEGORIES, ROLE_NAMES
+from app.constants import GENDER_ICONS, GENDERS, INTERESTS, REPORT_CATEGORIES, ROLE_NAMES
 from app.utils.text import shorten
 
 # --------------------------------------------------------------------------- регистрация
@@ -46,15 +47,13 @@ def captcha(options: Sequence[str], nonce: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def gender(prefix: str = "reg") -> InlineKeyboardMarkup:
-    factory = RegCB if prefix == "reg" else ProfileCB
+def gender() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     for code, title in GENDERS.items():
-        text = f"{'👨' if code == 'm' else '👩'} Я {title}"
-        if prefix == "reg":
-            builder.button(text=text, callback_data=RegCB(action="gender", value=code))
-        else:
-            builder.button(text=text, callback_data=ProfileCB(action="set_gender", value=code))
+        builder.button(
+            text=f"{GENDER_ICONS.get(code, '')} Я {title}",
+            callback_data=RegCB(action="gender", value=code),
+        )
     builder.adjust(2)
     return builder.as_markup()
 
@@ -123,6 +122,14 @@ def feed(target_id: int, *, superlikes_left: int = 0) -> InlineKeyboardMarkup:
     builder.button(text=super_text, callback_data=FeedCB(action="super", target=target_id))
     builder.button(text="🚩 Жалоба", callback_data=FeedCB(action="report", target=target_id))
     builder.adjust(2, 2)
+    return builder.as_markup()
+
+
+def superlike_note(target_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="💬 Добавить сообщение", callback_data=FeedCB(action="note", target=target_id)
+    )
     return builder.as_markup()
 
 

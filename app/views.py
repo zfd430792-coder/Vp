@@ -1,11 +1,11 @@
 """Сборка текстов карточек — анкет, жалоб, админских сводок."""
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any
+from collections.abc import Iterable
 
 from app.constants import (
     GENDER_ICONS,
-    GENDERS,
     INTERESTS,
     MOD_HOLD,
     MOD_OK,
@@ -188,7 +188,7 @@ def admin_user_card(card: dict[str, Any], *, risk: int = 0, signals: Iterable[st
     user_id = card.get("user_id") or card.get("id")
     username = card.get("username")
     lines = [
-        f"🗂 <b>Карточка пользователя</b>",
+        "🗂 <b>Карточка пользователя</b>",
         f"ID: <code>{user_id}</code>"
         + (f" · @{esc(username)}" if username else " · без username"),
     ]
@@ -353,9 +353,3 @@ def chat_history_text(messages: list[dict[str, Any]], names: dict[int, str]) -> 
         lines.append(f"<b>{esc(author)}</b> <i>{stamp}</i>\n{body}")
     return "\n\n".join(lines)
 
-
-def match_row(match: dict[str, Any]) -> str:
-    unread = int(match.get("unread") or 0)
-    badge = f" · 🔴 {unread}" if unread else ""
-    name = esc(match.get("name") or "Аноним")
-    return f"{name}, {match.get('age') or '—'}{badge}"

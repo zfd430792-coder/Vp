@@ -4,10 +4,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+from contextlib import suppress
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, ErrorEvent
 
@@ -86,7 +88,23 @@ async def main() -> None:
     maintenance = Maintenance(bot, db, settings, config)
 
     try:
-        me = await bot.get_me()
+        try:
+            me = await bot.get_me()
+        except TelegramUnauthorizedError as error:
+            print(
+                "\n❌ Telegram не принял токен. Проверьте BOT_TOKEN в .env "
+                "или получите новый у @BotFather.\n",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from error
+        except TelegramNetworkError as error:
+            print(
+                f"\n❌ Не удалось связаться с Telegram: {error}\n"
+                "Проверьте интернет-соединение и попробуйте ещё раз.\n",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from error
+
         log.info("Запускаюсь как @%s (id=%s)", me.username, me.id)
         await bot.set_my_commands(COMMANDS)
         await bot.delete_webhook(drop_pending_updates=True)
@@ -100,7 +118,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
+    with suppress(KeyboardInterrupt, SystemExit):
         asyncio.run(main())
-    except (KeyboardInterrupt, SystemExit):
-        pass

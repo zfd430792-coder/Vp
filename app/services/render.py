@@ -1,7 +1,8 @@
 """Отправка карточек анкет в чат."""
 from __future__ import annotations
 
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InputMediaPhoto

@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app import texts
 from app.callbacks import FeedCB
-from app.constants import ACT_LIKE, ACT_PASS, ACT_SUPERLIKE, DAY, HOUR
+from app.constants import ACT_LIKE, ACT_PASS, ACT_SUPERLIKE, HOUR
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline
@@ -22,12 +22,14 @@ from app.services import profiles as profiles_service
 from app.services import render
 from app.services import users as users_service
 from app.services.settings import Settings
-from app.utils.text import human_delta
+from app.states import Like
+from app.utils.text import has_contacts, human_delta, shorten
 from app.utils.time import now
 
 router = Router(name="feed")
 
 LIKE_NOTIFY_COOLDOWN = 3 * HOUR
+NOTE_MAX_LEN = 200
 
 
 @router.message(StateFilter(None), F.text == texts.BTN_FEED)
@@ -40,7 +42,7 @@ async def open_feed(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    await state.set_state(None)
+    await ui.leave_chat_mode(state, int(user["id"]))
     profile = await ui.require_profile(bot, db, message.chat.id, user)
     if not profile:
         return
@@ -168,10 +170,82 @@ async def feed_action(
         await celebrate_match(bot, db, user_id, target_id, result.match_id)
     elif action in (ACT_LIKE, ACT_SUPERLIKE):
         await _maybe_notify_like(bot, db, target_id, superlike=action == ACT_SUPERLIKE)
+        if action == ACT_SUPERLIKE:
+            await notify.send_message(
+                bot,
+                db,
+                chat_id,
+                "💥 <b>Суперлайк отправлен</b>\n\n"
+                "Хочешь добавить пару слов? С сообщением отвечают заметно чаще.",
+                reply_markup=inline.superlike_note(target_id),
+            )
 
     await ui.show_next_profile(
         bot, db, settings, state, chat_id=chat_id, user=user, profile=profile, notice=notice
     )
+
+
+@router.callback_query(FeedCB.filter(F.action == "note"))
+async def superlike_note_start(
+    query: CallbackQuery,
+    callback_data: FeedCB,
+    state: FSMContext,
+    db: Database,
+    user: dict[str, Any],
+) -> None:
+    """Пара слов к суперлайку — бесплатно и без «премиума»."""
+    row = await likes_service.existing(db, int(user["id"]), int(callback_data.target))
+    if not row or row["action"] != ACT_SUPERLIKE:
+        await query.answer("Суперлайк уже неактуален", show_alert=True)
+        return
+    if row["responded"]:
+        await query.answer("Человек уже ответил — напиши ему в диалоге", show_alert=True)
+        return
+
+    await state.set_state(Like.note)
+    await state.update_data(note_target=int(callback_data.target))
+    await query.answer()
+    if query.message:
+        await query.message.answer(
+            f"💬 Напиши пару строк (до {NOTE_MAX_LEN} символов) — человек увидит их вместе "
+            "с твоим суперлайком.\n\nОтменить: /cancel"
+        )
+
+
+@router.message(Like.note, F.text)
+async def superlike_note_save(
+    message: Message, state: FSMContext, db: Database, user: dict[str, Any]
+) -> None:
+    data = await state.get_data()
+    target_id = int(data.get("note_target") or 0)
+    await state.set_state(None)
+    if not target_id:
+        await message.answer(texts.ERROR_GENERIC)
+        return
+
+    note = (message.text or "").strip()
+    if has_contacts(note):
+        await message.answer(
+            "⚠️ Ссылки, ники и номера телефонов отправлять нельзя. Напиши обычным текстом."
+        )
+        await state.set_state(Like.note)
+        return
+    note = shorten(note, NOTE_MAX_LEN)
+
+    updated = await db.modify(
+        "UPDATE likes SET message = ? WHERE from_id = ? AND to_id = ? AND action = ? "
+        "AND responded = 0",
+        (note, int(user["id"]), target_id, ACT_SUPERLIKE),
+    )
+    if updated:
+        await message.answer("✅ Сообщение добавлено к суперлайку.")
+    else:
+        await message.answer("Суперлайк уже неактуален — сообщение не добавлено.")
+
+
+@router.message(Like.note)
+async def superlike_note_wrong(message: Message) -> None:
+    await message.answer("Здесь нужен текст. Отменить — /cancel")
 
 
 async def _maybe_notify_like(bot: Bot, db: Database, target_id: int, *, superlike: bool) -> None:

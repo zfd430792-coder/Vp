@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict, deque
-from typing import Any, Awaitable, Callable
+from typing import Any
+from collections.abc import Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message, TelegramObject

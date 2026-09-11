@@ -13,7 +13,7 @@ from app.config import Config
 from app.constants import MAX_INTERESTS, MAX_PHOTOS, MOD_HOLD, MOD_OK, MOD_REVIEW
 from app.db import Database
 from app.handlers import ui
-from app.keyboards import inline, reply
+from app.keyboards import inline
 from app.services import antifraud, notify
 from app.services import profiles as profiles_service
 from app.services import render
@@ -23,6 +23,55 @@ from app.states import Reg
 from app.utils.text import ValidationError, clean_age, clean_bio, clean_city, clean_name, esc, has_contacts, normalize_city
 
 router = Router(name="registration")
+
+
+
+async def preload(state: FSMContext, profile: dict[str, Any]) -> None:
+    """Переносит уже сохранённые поля анкеты в состояние диалога."""
+    interests = [code for code in str(profile.get("interests") or "").split(",") if code]
+    await state.update_data(
+        reg_name=profile.get("name"),
+        reg_age=profile.get("age"),
+        reg_gender=profile.get("gender"),
+        reg_seeking=profile.get("seeking"),
+        reg_city=profile.get("city"),
+        reg_bio=profile.get("bio") or "",
+        reg_interests=interests,
+    )
+
+
+async def resume(
+    message: Message, state: FSMContext, db: Database, profile: dict[str, Any]
+) -> bool:
+    """Продолжает анкету с того места, где она оборвалась.
+
+    Возвращает False, если продолжать нечего (анкета пустая).
+    """
+    if not profile.get("name"):
+        return False
+
+    await preload(state, profile)
+    photos = await profiles_service.count_photos(db, int(profile["user_id"]))
+
+    if not profile.get("age"):
+        await state.set_state(Reg.age)
+        await message.answer(texts.ASK_AGE)
+    elif not profile.get("gender"):
+        await state.set_state(Reg.gender)
+        await message.answer(texts.ASK_GENDER, reply_markup=inline.gender())
+    elif not profile.get("city"):
+        await state.set_state(Reg.city)
+        await message.answer(texts.ASK_CITY)
+    elif not photos:
+        await state.set_state(Reg.photos)
+        await state.update_data(reg_photos=[])
+        await message.answer(
+            "📷 <b>В анкете не хватает фотографии</b>\n\n"
+            "Остальное уже сохранено — пришли фото, и анкета вернётся в поиск."
+        )
+    else:
+        return False
+    return True
 
 
 @router.message(Reg.name, F.text)

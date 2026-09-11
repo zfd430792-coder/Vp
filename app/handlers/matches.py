@@ -66,7 +66,7 @@ async def show_matches(
 async def open_matches(
     message: Message, bot: Bot, state: FSMContext, db: Database, user: dict[str, Any]
 ) -> None:
-    await state.set_state(None)
+    await ui.leave_chat_mode(state, int(user["id"]))
     profile = await ui.require_profile(bot, db, message.chat.id, user)
     if not profile:
         return

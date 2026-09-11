@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -55,8 +55,6 @@ class Config:
     support_contact: str = "@support"
     log_level: str = "INFO"
     tasks_interval: int = 300
-    banner_path: Path | None = None
-    extras: dict[str, str] = field(default_factory=dict)
 
 
 def load_config() -> Config:

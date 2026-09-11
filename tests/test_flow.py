@@ -261,7 +261,6 @@ async def main() -> None:
     check("давление жалоб посчитано", unique == 4 and weight > 4, f"{unique}/{weight}")
 
     print("\n▶ Скрытая анкета не попадает в ленту")
-    profile4 = await profiles.get(db, 1004)
     user4 = await users.get(db, 1004)
     await profiles.update(db, 1004, seeking="m")
     visible_for_olya = await feed.count_available(db, settings, user4, await profiles.get(db, 1004))

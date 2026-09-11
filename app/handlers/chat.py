@@ -8,7 +8,7 @@ from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from app import texts, views
+from app import texts
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline
