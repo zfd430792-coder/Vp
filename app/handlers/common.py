@@ -12,6 +12,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app import texts
 from app.callbacks import CaptchaCB, RegCB
+from app.config import Config
 from app.constants import HOUR
 from app.db import Database
 from app.handlers import ui
@@ -262,10 +263,10 @@ async def captcha_needs_button(message: Message) -> None:
 @router.message(Command("help"))
 @router.message(F.text == "❓ Помощь")
 async def cmd_help(
-    message: Message, db: Database, settings: Settings, user: dict[str, Any]
+    message: Message, settings: Settings, config: Config, user: dict[str, Any]
 ) -> None:
     limit = limits_service.limit_for(user, settings)
-    await message.answer(texts.help_text(limit))
+    await message.answer(texts.help_text(limit, config.support_contact))
 
 
 @router.message(Command("safety"))

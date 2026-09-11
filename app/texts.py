@@ -293,7 +293,9 @@ HELP = (
     "/safety — памятка по безопасности\n"
     "/stop — скрыть анкету из поиска\n"
     "/delete — удалить анкету и данные"
+    "{support}"
 )
+SUPPORT_LINE = "\n\n<b>Поддержка:</b> {contact}. Жалобы и апелляции быстрее — через кнопки в боте."
 
 MENU = "Главное меню. Выбирай, что дальше 👇"
 
@@ -321,10 +323,12 @@ UNKNOWN_INPUT = "Не понял. Выбери действие в меню ни
 NOT_REGISTERED = "Сначала нужна анкета. Нажми /start — это быстро."
 
 
-def help_text(likes_limit: int) -> str:
+def help_text(likes_limit: int, support_contact: str = "") -> str:
+    support = SUPPORT_LINE.format(contact=esc(support_contact)) if support_contact else ""
     return HELP.format(
         likes=likes_limit,
         likes_word=plural(likes_limit, "лайк", "лайка", "лайков"),
+        support=support,
     )
 
 

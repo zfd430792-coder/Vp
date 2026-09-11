@@ -79,9 +79,6 @@ class Maintenance:
                 "banned_by = NULL WHERE id = ?",
                 (STATUS_ACTIVE, user_id),
             )
-            await self.db.execute(
-                "UPDATE profiles SET is_visible = 1 WHERE user_id = ?", (user_id,)
-            )
             await notify.send_message(self.bot, self.db, user_id, texts.BAN_LIFTED)
             log.info("Снята истёкшая блокировка: %s", user_id)
 

@@ -152,10 +152,11 @@ async def ban(
         """,
         (STATUS_BANNED, until, permanent, reason, by, user_id),
     )
-    await db.execute("UPDATE profiles SET is_visible = 0 WHERE user_id = ?", (user_id,))
+    # Анкету специально не трогаем: заблокированных и так нет в поиске,
+    # зато после разблокировки сохранится выбор самого человека (пауза или показ).
 
 
-async def unban(db: Database, user_id: int, *, restore_profile: bool = True) -> None:
+async def unban(db: Database, user_id: int) -> None:
     await db.execute(
         """
         UPDATE users
@@ -164,8 +165,6 @@ async def unban(db: Database, user_id: int, *, restore_profile: bool = True) -> 
         """,
         (STATUS_ACTIVE, user_id),
     )
-    if restore_profile:
-        await db.execute("UPDATE profiles SET is_visible = 1 WHERE user_id = ?", (user_id,))
 
 
 async def set_shadow(

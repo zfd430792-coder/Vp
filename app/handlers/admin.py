@@ -191,8 +191,13 @@ async def _close_reports(
 @router.message(Command("admin"))
 @router.message(StateFilter(None), F.text == texts.BTN_ADMIN)
 async def admin_menu(
-    message: Message, state: FSMContext, db: Database, settings: Settings
+    message: Message,
+    state: FSMContext,
+    db: Database,
+    settings: Settings,
+    user: dict[str, Any],
 ) -> None:
+    chat_service.close_chat(int(user["id"]))
     await state.set_state(None)
     text, markup = await _menu_text(db, settings)
     await message.answer(text, reply_markup=markup)
@@ -733,6 +738,11 @@ async def admin_approve_profile(
     if profile:
         was_hidden = profile.get("moderation") == MOD_HOLD
     await profiles_service.set_moderation(db, target_id, MOD_OK, None)
+    # Раз анкету одобрили — снимаем и автоматическое снижение охвата
+    target_user = await users_service.get(db, target_id)
+    if target_user and users_service.is_shadowed(target_user):
+        await users_service.clear_shadow(db, target_id)
+        await notify.send_message(bot, db, target_id, texts.SHADOW_LIFTED)
     await moderation.log_action(db, int(user["id"]), "approve_profile", target_id=target_id)
     if was_hidden:
         await notify.send_message(

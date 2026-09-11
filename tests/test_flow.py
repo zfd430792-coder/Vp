@@ -283,7 +283,14 @@ async def main() -> None:
     await users.ban(db, 1006, reason="мошенничество", seconds=3600, by=1)
     user6 = await users.get(db, 1006)
     check("бан действует", users.is_banned(user6))
-    check("анкета скрыта при бане", (await profiles.get(db, 1006))["is_visible"] == 0)
+    banned_visible = await db.fetchval(
+        "SELECT COUNT(*) FROM profiles p JOIN users u ON u.id = p.user_id "
+        "WHERE p.user_id = 1006 AND u.status = 'active'",
+        (),
+        0,
+    )
+    check("заблокированный выпадает из поиска", int(banned_visible) == 0)
+    check("пауза анкеты не тронута баном", (await profiles.get(db, 1006))["is_visible"] == 1)
     await users.unban(db, 1006)
     check("разбан снимает ограничение", not users.is_banned(await users.get(db, 1006)))
 
