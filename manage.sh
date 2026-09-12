@@ -123,6 +123,41 @@ check_env() {
     fi
 }
 
+git_here() {
+    command -v git >/dev/null 2>&1 && [ -d "$PROJECT_DIR/.git" ]
+}
+
+git_value() {
+    git -C "$PROJECT_DIR" "$@" 2>/dev/null || true
+}
+
+do_version() {
+    ui_blank
+    ui_rule
+    ui_blank
+    ui_head "💛  Версия бота"
+    ui_blank
+    if ! git_here; then
+        ui_text "Проект скачан без истории git — версию определить нечем."
+        ui_blank
+        ui_rule
+        ui_blank
+        return 0
+    fi
+
+    printf '     Версия      %s\n' "$(git_value rev-parse --short HEAD)"
+    printf '     Обновлён    %s\n' "$(git_value log -1 --format=%cd --date=format:'%d.%m.%Y %H:%M')"
+    printf '     Ветка       %s\n' "$(git_value rev-parse --abbrev-ref HEAD)"
+    ui_blank
+    ui_text "Последние изменения"
+    git_value log -5 --format='%h · %cd · %s' --date=format:'%d.%m' | ui_trim 60 | sed 's/^/       /'
+    ui_blank
+    ui_dim "проверить обновления: $SELF update --check"
+    ui_blank
+    ui_rule
+    ui_blank
+}
+
 mode_title() {
     case "$MODE" in
         systemd-system) printf 'служба systemd, системная' ;;
@@ -264,6 +299,11 @@ do_status() {
         printf '     Состояние   %s● остановлен%s\n' "$UI_RED" "$UI_R"
     fi
     printf '     Режим       %s\n' "$(mode_title)"
+    if git_here; then
+        printf '     Версия      %s от %s\n' \
+            "$(git_value rev-parse --short HEAD)" \
+            "$(git_value log -1 --format=%cd --date=format:'%d.%m.%Y')"
+    fi
 
     case "$MODE" in
         systemd-user|systemd-system)
@@ -279,6 +319,11 @@ do_status() {
 
     ui_blank
     db_summary | sed 's/^/     /'
+    if git_here; then
+        ui_blank
+        ui_text "Последнее изменение в коде"
+        git_value log -1 --format='%s' | ui_trim 60 | sed 's/^/       /'
+    fi
     ui_blank
     ui_text "Последние строки лога"
     case "$MODE" in
@@ -336,6 +381,7 @@ usage() {
     ui_cmd "$SELF restart" "перезапустить"
     ui_cmd "$SELF start" "запустить"
     ui_cmd "$SELF stop" "остановить"
+    ui_cmd "$SELF version" "какая версия стоит и что менялось"
     ui_blank
 }
 
@@ -348,6 +394,7 @@ case "${1:-status}" in
     update)     shift || true; do_update "$@" ;;
     is-running) is_running ;;
     is-healthy) shift || true; do_healthcheck "${1:-8}" ;;
+    version|--version|-v) do_version ;;
     help|-h|--help) usage ;;
     *)          usage; exit 1 ;;
 esac
