@@ -13,7 +13,21 @@
 
 set -euo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Установщик подтягивает свежий код, а значит может перезаписать сам себя.
+# bash дочитывает файл по ходу выполнения, поэтому работаем из временной копии.
+if [ -n "${INSTALL_PROJECT_DIR:-}" ]; then
+    PROJECT_DIR="$INSTALL_PROJECT_DIR"
+    trap 'rm -f "${INSTALL_COPY:-}"' EXIT
+else
+    PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SELF_COPY="$(mktemp 2>/dev/null || printf '/tmp/install-bot.%s.sh' "$$")"
+    if cat "${BASH_SOURCE[0]}" > "$SELF_COPY" 2>/dev/null; then
+        export INSTALL_PROJECT_DIR="$PROJECT_DIR" INSTALL_COPY="$SELF_COPY"
+        exec bash "$SELF_COPY" "$@"
+    fi
+    rm -f "$SELF_COPY"
+fi
+
 cd "$PROJECT_DIR"
 
 if [ ! -f "$PROJECT_DIR/scripts/ui.sh" ]; then
@@ -30,7 +44,15 @@ ENV_FILE="$PROJECT_DIR/.env"
 SERVICE_NAME="dating-bot"
 MIN_PY_MAJOR=3
 MIN_PY_MINOR=10
-TOTAL_STEPS=7
+TOTAL_STEPS=8
+
+# Обновление кода можно отключить: bash install.sh --no-pull
+PULL_CODE=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-pull) PULL_CODE=0 ;;
+    esac
+done
 
 # Имя глобальной команды: чтобы управлять ботом из любой папки, без cd
 
@@ -158,7 +180,37 @@ if [ "$NEEDS_INPUT" -eq 1 ] && [ ! -f "$ENV_FILE" ]; then
 fi
 ui_rule
 
-# ------------------------------------------------------------------ 1. Python
+# ------------------------------------------------------------------ 1. свежий код
+
+step "Проверяю, свежий ли код"
+
+if [ "$PULL_CODE" -eq 0 ]; then
+    ui_note "обновление кода пропущено по вашей просьбе"
+elif ! command -v git >/dev/null 2>&1 || [ ! -d "$PROJECT_DIR/.git" ]; then
+    ui_note "проект скачан без истории git — ставлю то, что есть"
+else
+    GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+    if [ -z "$GIT_BRANCH" ] || [ "$GIT_BRANCH" = HEAD ]; then
+        ui_note "ветка не определена — ставлю то, что есть"
+    elif ! git fetch --quiet origin "$GIT_BRANCH" 2>/dev/null; then
+        ui_warn "не удалось связаться с репозиторием — ставлю то, что есть"
+    else
+        BEHIND="$(git rev-list --count "HEAD..origin/$GIT_BRANCH" 2>/dev/null || echo 0)"
+        if [ "$BEHIND" = "0" ]; then
+            ui_ok "код уже свежий"
+        elif [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+            ui_warn "в проекте есть изменённые файлы — код не трогаю"
+            ui_note "сохраните или отмените их: git status"
+        elif git merge --ff-only --quiet "origin/$GIT_BRANCH" 2>/dev/null; then
+            ui_ok "код обновлён, применено коммитов: $BEHIND"
+            chmod +x "$PROJECT_DIR"/*.sh "$PROJECT_DIR"/scripts/*.sh 2>/dev/null || true
+        else
+            ui_warn "обновить код не удалось — ставлю то, что есть"
+        fi
+    fi
+fi
+
+# ------------------------------------------------------------------ 2. Python
 
 step "Проверяю Python"
 
@@ -210,7 +262,7 @@ mkdir -p "$PROJECT_DIR/data" "$PROJECT_DIR/logs"
 
 # ------------------------------------------------------------------ 3. настройки
 
-step "Спрашиваю токен и владельца"
+step "Проверяю настройки"
 
 read_env_value() {
     [ -f "$ENV_FILE" ] || return 0
@@ -226,13 +278,15 @@ ADMINS="${OWNER_IDS:-}"
 OLD_TOKEN="$(read_env_value BOT_TOKEN || true)"
 OLD_ADMINS="$(read_env_value OWNER_IDS || true)"
 
-if [ -z "$TOKEN" ] && [ -n "$OLD_TOKEN" ]; then
-    ui_dim "в .env уже есть настройки: бот ...${OLD_TOKEN: -6}, владелец ${OLD_ADMINS:-не указан}"
-    if confirm "Оставить их?"; then
-        TOKEN="$OLD_TOKEN"
-        ADMINS="$OLD_ADMINS"
-        ui_ok "прежние настройки сохранены"
-    fi
+# Если в .env уже лежат годные настройки — молча берём их. Повторный запуск
+# установщика не должен превращаться в допрос: человек пришёл обновиться.
+if [ -z "$TOKEN" ] && [ -n "$OLD_TOKEN" ] && valid_token "$OLD_TOKEN" && valid_admins "${OLD_ADMINS:-}"; then
+    TOKEN="$OLD_TOKEN"
+    ADMINS="$OLD_ADMINS"
+    ui_ok "настройки на месте: бот ...${OLD_TOKEN: -6}, владелец $ADMINS"
+    ui_note "вводить ничего не нужно"
+elif [ -z "$TOKEN" ] && [ -n "$OLD_TOKEN" ]; then
+    ui_warn "в .env есть настройки, но они выглядят неполными — спрошу заново"
 fi
 
 if [ -z "$TOKEN" ]; then
