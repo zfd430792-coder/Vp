@@ -22,6 +22,7 @@ fi
 # shellcheck source=scripts/ui.sh
 . "$PROJECT_DIR/scripts/ui.sh"
 
+SELF="${BOT_CMD:-./manage.sh}"
 PY="$PROJECT_DIR/.venv/bin/python"
 ENV_FILE="$PROJECT_DIR/.env"
 BACKUP_DIR="$PROJECT_DIR/data/backups"
@@ -213,9 +214,10 @@ chmod +x "$PROJECT_DIR"/*.sh "$PROJECT_DIR"/scripts/*.sh 2>/dev/null || true
 step "Перезапускаю и проверяю"
 
 "$PROJECT_DIR/manage.sh" restart --quiet || true
-sleep 4
 
-if "$PROJECT_DIR/manage.sh" is-running; then
+# Не «процесс появился», а «прожил несколько секунд»: падающий по кругу бот
+# не должен считаться успешным обновлением
+if "$PROJECT_DIR/manage.sh" is-healthy 8; then
     ui_ok "бот работает на новой версии"
     SCHEMA="$("$PY" - "$DB_FULL" <<'PYCODE' 2>/dev/null || true
 import sqlite3
@@ -250,9 +252,9 @@ PYCODE
 
     ui_blank
     ui_text "Полезное"
-    ui_cmd "./manage.sh status" "состояние и статистика"
-    ui_cmd "./manage.sh logs" "живой лог"
-    ui_cmd "./update.sh --check" "посмотреть, есть ли обновления"
+    ui_cmd "$SELF" "состояние и статистика"
+    ui_cmd "$SELF logs" "живой лог"
+    ui_cmd "$SELF update --check" "посмотреть, есть ли обновления"
     ui_blank
     ui_rule
     ui_blank
@@ -274,15 +276,14 @@ if git reset --hard --quiet "$OLD_COMMIT" 2>/dev/null; then
     ui_ok "код возвращён на ${OLD_COMMIT:0:7}"
     "$PY" -m pip install --quiet -r "$PROJECT_DIR/requirements.txt" >/dev/null 2>&1 || true
     "$PROJECT_DIR/manage.sh" restart --quiet || true
-    sleep 4
-    if "$PROJECT_DIR/manage.sh" is-running; then
+    if "$PROJECT_DIR/manage.sh" is-healthy 6; then
         ui_ok "бот снова работает на предыдущей версии"
         notify_owner "⚠️ <b>Обновление откатилось</b>
 Новая версия <code>${NEW_COMMIT:0:7}</code> не запустилась, вернул <code>${OLD_COMMIT:0:7}</code>.
-Бот работает на прежней версии, причина в логе: ./manage.sh logs"
+Бот работает на прежней версии, причина в логе."
     else
         ui_warn "поднять бота не удалось даже на старой версии"
-        ui_note "запустите вручную и посмотрите лог: ./manage.sh start && ./manage.sh logs"
+        ui_note "запустите вручную и посмотрите лог: $SELF start, затем $SELF logs"
         notify_owner "🚨 <b>Бот не поднялся</b>
 Обновление откатилось на <code>${OLD_COMMIT:0:7}</code>, но запустить бота не удалось.
 Нужны руки: ./manage.sh start и ./manage.sh logs"

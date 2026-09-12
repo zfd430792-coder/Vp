@@ -24,6 +24,9 @@ CHILD_PID_FILE="$PROJECT_DIR/data/bot.child.pid"
 LOG_FILE="$PROJECT_DIR/logs/bot.log"
 MODE_FILE="$PROJECT_DIR/data/runmode"
 
+# Как нас позвали: через глобальную команду или напрямую из папки проекта
+SELF="${BOT_CMD:-./manage.sh}"
+
 QUIET=0
 for arg in "$@"; do
     [ "$arg" = "--quiet" ] && QUIET=1
@@ -65,6 +68,46 @@ is_running() {
         systemd-user|systemd-system) sc is-active --quiet "$SERVICE_NAME" ;;
         *) child_alive ;;
     esac
+}
+
+restart_count() {
+    # Сколько раз служба перезапускалась — растёт, если бот падает по кругу
+    case "$MODE" in
+        systemd-user|systemd-system)
+            sc show "$SERVICE_NAME" --property=NRestarts --value 2>/dev/null || printf '0'
+            ;;
+        *) printf '0' ;;
+    esac
+}
+
+do_healthcheck() {
+    # «Запустился» — это не «процесс появился», а «один и тот же процесс прожил
+    # несколько секунд». Иначе падающий по кругу бот выглядел бы работающим.
+    local settle="${1:-8}" waited=0 first="" second="" restarts_before="" restarts_after=""
+
+    while [ "$waited" -lt 12 ]; do
+        is_running && break
+        waited=$((waited + 1))
+        sleep 1
+    done
+    is_running || return 1
+
+    first="$(cat "$CHILD_PID_FILE" 2>/dev/null || true)"
+    restarts_before="$(restart_count)"
+    sleep "$settle"
+    is_running || return 1
+
+    case "$MODE" in
+        systemd-user|systemd-system)
+            restarts_after="$(restart_count)"
+            [ "$restarts_before" = "$restarts_after" ] || return 1
+            ;;
+        *)
+            second="$(cat "$CHILD_PID_FILE" 2>/dev/null || true)"
+            [ -n "$first" ] && [ "$first" = "$second" ] || return 1
+            ;;
+    esac
+    return 0
 }
 
 check_env() {
@@ -116,7 +159,7 @@ do_start() {
         sleep 1
     done
 
-    fail "запустить не удалось — посмотрите ./manage.sh logs"
+    fail "запустить не удалось — посмотрите: $SELF logs"
     return 1
 }
 
@@ -281,12 +324,12 @@ usage() {
     ui_blank
     ui_head "Управление ботом"
     ui_blank
-    ui_cmd "./manage.sh start" "запустить"
-    ui_cmd "./manage.sh stop" "остановить"
-    ui_cmd "./manage.sh restart" "перезапустить"
-    ui_cmd "./manage.sh status" "состояние и статистика"
-    ui_cmd "./manage.sh logs" "живой лог, Ctrl+C — выйти"
-    ui_cmd "./manage.sh update" "обновить бота (то же, что ./update.sh)"
+    ui_cmd "$SELF" "состояние и статистика"
+    ui_cmd "$SELF update" "обновить бота"
+    ui_cmd "$SELF logs" "живой лог, Ctrl+C — выйти"
+    ui_cmd "$SELF restart" "перезапустить"
+    ui_cmd "$SELF start" "запустить"
+    ui_cmd "$SELF stop" "остановить"
     ui_blank
 }
 
@@ -298,6 +341,7 @@ case "${1:-status}" in
     logs)       do_logs ;;
     update)     shift || true; do_update "$@" ;;
     is-running) is_running ;;
+    is-healthy) shift || true; do_healthcheck "${1:-8}" ;;
     help|-h|--help) usage ;;
     *)          usage; exit 1 ;;
 esac
