@@ -283,6 +283,7 @@ async def celebrate_match(
         partner_card = await profiles_service.card(db, partner)
         if not partner_card:
             continue
+        ui.attach_distance(partner_card, await profiles_service.get(db, me))
         me_user = await users_service.get(db, me)
         if not me_user or users_service.is_banned(me_user):
             continue

@@ -241,6 +241,19 @@ MIGRATIONS: list[list[str]] = [
     [
         "ALTER TABLE users ADD COLUMN active_match_id INTEGER",
     ],
+    # --- версия 5: координаты города и радиус поиска -------------------------------
+    #
+    # search_radius заменяет only_my_city: 0 — только свой город, 1..998 — радиус
+    # в километрах, 999 и больше — без ограничения по географии. Старая колонка
+    # остаётся в таблице как след истории, но код её больше не читает.
+    [
+        "ALTER TABLE profiles ADD COLUMN lat REAL",
+        "ALTER TABLE profiles ADD COLUMN lon REAL",
+        "ALTER TABLE profiles ADD COLUMN geo_source TEXT",
+        "ALTER TABLE profiles ADD COLUMN search_radius INTEGER NOT NULL DEFAULT 0",
+        "UPDATE profiles SET search_radius = CASE WHEN only_my_city = 1 THEN 0 ELSE 999 END",
+        "CREATE INDEX IF NOT EXISTS idx_profiles_geo ON profiles(lat, lon)",
+    ],
 ]
 
 

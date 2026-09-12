@@ -31,8 +31,8 @@ async def update(db: Database, user_id: int, **fields: Any) -> None:
     """Обновляет произвольные поля анкеты (белый список колонок)."""
     allowed = {
         "name", "age", "gender", "seeking", "city", "city_norm", "bio", "bio_hash", "interests",
-        "age_min", "age_max", "only_my_city", "only_verified", "is_complete", "is_visible",
-        "moderation", "moderation_note",
+        "age_min", "age_max", "only_verified", "is_complete", "is_visible",
+        "moderation", "moderation_note", "lat", "lon", "geo_source", "search_radius",
     }
     payload = {key: value for key, value in fields.items() if key in allowed}
     if not payload:

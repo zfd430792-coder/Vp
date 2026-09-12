@@ -38,6 +38,17 @@ def chat_menu() -> ReplyKeyboardMarkup:
     )
 
 
+def city_input() -> ReplyKeyboardMarkup:
+    """Клавиатура шага с городом: можно прислать местоположение одной кнопкой."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="📍 Отправить местоположение", request_location=True)]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
 def cancel(text: str = "❌ Отмена") -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=text)]], resize_keyboard=True)
 

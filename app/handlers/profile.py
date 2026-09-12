@@ -22,8 +22,8 @@ from app.constants import (
 )
 from app.db import Database
 from app.handlers import ui
-from app.keyboards import inline
-from app.services import antifraud, insights, notify, render, verification
+from app.keyboards import inline, reply
+from app.services import antifraud, geo, insights, notify, render, verification
 from app.services import likes as likes_service
 from app.services import limits as limits_service
 from app.services import profiles as profiles_service
@@ -33,8 +33,8 @@ from app.utils.text import (
     ValidationError,
     clean_age,
     clean_bio,
-    clean_city,
     clean_name,
+    esc,
     has_contacts,
     human_delta,
 )
@@ -370,7 +370,10 @@ async def edit_field(
     prompts = {
         "name": ("Как тебя зовут? Напиши новое имя.", Edit.name),
         "age": ("Сколько тебе лет? Напиши числом.", Edit.age),
-        "city": ("Из какого ты города?", Edit.city),
+        "city": (
+            "Из какого ты города? Напиши название или пришли местоположение кнопкой ниже.",
+            Edit.city,
+        ),
         "bio": (
             f"Расскажи о себе (до {BIO_MAX_LEN} символов).\n"
             "Отправь «-», чтобы очистить описание.",
@@ -381,7 +384,8 @@ async def edit_field(
     await state.set_state(target_state)
     await query.answer()
     if query.message:
-        await query.message.answer(prompt)
+        markup = reply.city_input() if callback_data.action == "city" else None
+        await query.message.answer(prompt, reply_markup=markup)
 
 
 @router.message(Edit.name, F.text)
@@ -424,6 +428,46 @@ async def save_age(
     await show_profile(bot, db, settings, state, message.chat.id, user)
 
 
+async def apply_city(
+    db: Database,
+    user_id: int,
+    *,
+    name: str,
+    lat: float | None = None,
+    lon: float | None = None,
+    source: str | None = None,
+) -> None:
+    await profiles_service.update(
+        db, user_id, city=name, lat=lat, lon=lon, geo_source=source
+    )
+
+
+@router.message(Edit.city, F.location)
+async def save_city_location(
+    message: Message,
+    bot: Bot,
+    state: FSMContext,
+    db: Database,
+    settings: Settings,
+    user: dict[str, Any],
+) -> None:
+    location = message.location
+    if location is None:
+        return
+    lat, lon = geo.round_coords(location.latitude, location.longitude)
+    city = geo.nearest(lat, lon)
+    if city is None:
+        await message.answer(texts.CITY_LOCATION_UNKNOWN)
+        return
+
+    await apply_city(db, int(user["id"]), name=city.name, lat=lat, lon=lon, source="location")
+    await state.set_state(None)
+    await message.answer(
+        texts.CITY_FROM_LOCATION.format(city=esc(city.title)), reply_markup=reply.remove
+    )
+    await show_profile(bot, db, settings, state, message.chat.id, user)
+
+
 @router.message(Edit.city, F.text)
 async def save_city(
     message: Message,
@@ -433,15 +477,59 @@ async def save_city(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    try:
-        city = clean_city(message.text or "")
-    except ValidationError as error:
-        await message.answer(f"⚠️ {error}")
+    resolution = geo.resolve_input(message.text)
+
+    if resolution.kind == "invalid":
+        await message.answer(f"⚠️ {resolution.error}")
         return
-    await profiles_service.update(db, int(user["id"]), city=city)
+
+    if resolution.kind == "choice":
+        await message.answer(
+            texts.CITY_CHOICE,
+            reply_markup=inline.city_choice(resolution.matches, editing=True),
+        )
+        return
+
+    if resolution.kind == "city" and resolution.city is not None:
+        city = resolution.city
+        await apply_city(
+            db, int(user["id"]), name=city.name, lat=city.lat, lon=city.lon, source="city"
+        )
+        await message.answer(
+            texts.CITY_SET.format(city=esc(city.title)), reply_markup=reply.remove
+        )
+    else:
+        await apply_city(db, int(user["id"]), name=resolution.name)
+        await message.answer(
+            texts.CITY_FREE.format(city=esc(resolution.name)), reply_markup=reply.remove
+        )
+
     await state.set_state(None)
-    await message.answer("✅ Город обновлён.")
     await show_profile(bot, db, settings, state, message.chat.id, user)
+
+
+@router.callback_query(ProfileCB.filter(F.action == "city_pick"))
+async def save_city_pick(
+    query: CallbackQuery,
+    callback_data: ProfileCB,
+    bot: Bot,
+    state: FSMContext,
+    db: Database,
+    settings: Settings,
+    user: dict[str, Any],
+) -> None:
+    city = geo.by_name(callback_data.value)
+    if city is None or query.message is None:
+        await query.answer(texts.CITY_NOT_FOUND, show_alert=True)
+        return
+
+    await apply_city(
+        db, int(user["id"]), name=city.name, lat=city.lat, lon=city.lon, source="city"
+    )
+    await state.set_state(None)
+    await query.answer("Сохранено")
+    await query.message.edit_text(texts.CITY_SET.format(city=esc(city.title)))
+    await show_profile(bot, db, settings, state, query.message.chat.id, user)
 
 
 @router.message(Edit.bio, F.text)
@@ -585,7 +673,14 @@ async def cmd_stop(
 
 @router.message(Edit.name)
 @router.message(Edit.age)
-@router.message(Edit.city)
 @router.message(Edit.bio)
 async def edit_wrong_type(message: Message) -> None:
     await message.answer("Здесь нужен текст 🙂")
+
+
+@router.message(Edit.city)
+async def edit_city_wrong_type(message: Message) -> None:
+    await message.answer(
+        "Напиши название города текстом или пришли местоположение.",
+        reply_markup=reply.city_input(),
+    )

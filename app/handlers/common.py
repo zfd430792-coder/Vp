@@ -1,6 +1,7 @@
 """Старт, правила, капча, справка."""
 from __future__ import annotations
 
+import asyncio
 import random
 import re
 from typing import Any
@@ -17,13 +18,13 @@ from app.constants import HOUR
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline, reply
-from app.services import antifraud
+from app.services import antifraud, notify
 from app.services import limits as limits_service
 from app.services import profiles as profiles_service
 from app.services import users as users_service
 from app.services.settings import Settings
 from app.states import Reg
-from app.utils.text import plural
+from app.utils.text import esc, plural
 from app.utils.time import now
 
 router = Router(name="common")
@@ -44,6 +45,66 @@ async def _captcha_locked(db: Database, user_id: int) -> bool:
         0,
     )
     return int(fails) >= CAPTCHA_ATTEMPTS
+
+
+def warning_delay(settings: Settings) -> int:
+    """Сколько секунд держать кнопку согласия закрытой."""
+    return max(0, min(30, settings.get_int("warning_delay", 4)))
+
+
+async def show_warning(
+    bot: Bot, db: Database, settings: Settings, chat_id: int, state: FSMContext
+) -> None:
+    """Показывает предупреждение и открывает кнопку согласия через паузу.
+
+    Кнопки под сообщением сначала нет вообще: она появляется отдельной правкой,
+    когда отсчёт закончится. Так человек успевает прочитать текст, а ботоферма
+    не может проскочить экран мгновенным нажатием.
+    """
+    delay = warning_delay(settings)
+
+    def countdown(left: int) -> str:
+        word = plural(left, "секунду", "секунды", "секунд")
+        return texts.WARNING + texts.WARNING_WAIT.format(left=f"{left} {word}")
+
+    if delay <= 0:
+        await notify.send_message(
+            bot,
+            db,
+            chat_id,
+            texts.WARNING + texts.WARNING_READY,
+            reply_markup=inline.warning_accept(),
+        )
+        await state.update_data(warning_at=0)
+        return
+
+    message = await notify.send_message(bot, db, chat_id, countdown(delay))
+    if message is None:
+        return
+
+    await state.update_data(warning_at=now(), warning_msg=message.message_id)
+
+    for left in range(delay - 1, 0, -1):
+        await asyncio.sleep(1)
+        await notify.safe_call(
+            db,
+            chat_id,
+            bot.edit_message_text,
+            text=countdown(left),
+            chat_id=chat_id,
+            message_id=message.message_id,
+        )
+
+    await asyncio.sleep(1)
+    await notify.safe_call(
+        db,
+        chat_id,
+        bot.edit_message_text,
+        text=texts.WARNING + texts.WARNING_READY,
+        chat_id=chat_id,
+        message_id=message.message_id,
+        reply_markup=inline.warning_accept(),
+    )
 
 
 async def send_captcha(message: Message, state: FSMContext) -> None:
@@ -106,18 +167,25 @@ async def cmd_start(
         await _remember_source(db, user, payload)
 
     profile = await profiles_service.get(db, int(user["id"]))
+
+    # Анкета есть — здороваемся и сразу показываем меню
     if profile and profile.get("is_complete"):
         await ui.send_restriction_notice(bot, db, message.chat.id, user)
-        await ui.show_menu(bot, db, message.chat.id, user, texts.MENU)
+        name = profile.get("name") or user.get("tg_name") or "друг"
+        await ui.show_menu(
+            bot, db, message.chat.id, user, texts.WELCOME_BACK.format(name=esc(name))
+        )
         return
 
-    if not user.get("rules_accepted_at"):
-        await message.answer(texts.WELCOME, reply_markup=reply.remove)
-        await message.answer(texts.RULES, reply_markup=inline.rules())
-        return
+    # Анкеты нет — приветствие, затем предупреждение с кнопкой по таймеру
+    await message.answer(texts.WELCOME, reply_markup=reply.remove)
 
     if not settings.get_bool("registration_open", True):
         await message.answer(texts.REG_CLOSED)
+        return
+
+    if not user.get("rules_accepted_at"):
+        await show_warning(bot, db, settings, message.chat.id, state)
         return
 
     await start_registration(message, state, db, settings, user)
@@ -145,16 +213,18 @@ async def _remember_source(db: Database, user: dict[str, Any], payload: str) -> 
 
 
 @router.callback_query(RegCB.filter(F.action == "safety"))
-async def show_safety_from_rules(query: CallbackQuery) -> None:
+async def show_safety_from_warning(query: CallbackQuery) -> None:
     if query.message:
         await query.message.edit_text(texts.SAFETY, reply_markup=inline.after_safety())
     await query.answer()
 
 
 @router.callback_query(RegCB.filter(F.action == "rules_back"))
-async def back_to_rules(query: CallbackQuery) -> None:
+async def back_to_warning(query: CallbackQuery) -> None:
     if query.message:
-        await query.message.edit_text(texts.RULES, reply_markup=inline.rules())
+        await query.message.edit_text(
+            texts.WARNING + texts.WARNING_READY, reply_markup=inline.warning_accept()
+        )
     await query.answer()
 
 
@@ -174,16 +244,31 @@ async def accept_rules(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    await query.answer()
     if query.message is None:
+        await query.answer()
         return
+
+    # Подстраховка на случай нажатия в обход таймера: кнопки до срока и нет,
+    # но старая клавиатура из другого сообщения могла сохраниться у клиента
+    data = await state.get_data()
+    shown_at = int(data.get("warning_at") or 0)
+    delay = warning_delay(settings)
+    if shown_at and now() - shown_at < delay:
+        left = delay - (now() - shown_at)
+        await query.answer(
+            f"Дочитай, пожалуйста — кнопка станет активной через {left} сек",
+            show_alert=True,
+        )
+        return
+
+    await query.answer()
 
     if not user.get("rules_accepted_at"):
         await users_service.accept_rules(db, int(user["id"]))
         user["rules_accepted_at"] = now()
 
     await query.message.edit_text(
-        texts.RULES + "\n\n✅ <b>Правила приняты.</b>",
+        texts.WARNING + "\n\n✅ <b>Правила приняты.</b>",
     )
 
     if not settings.get_bool("registration_open", True):

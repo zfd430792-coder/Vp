@@ -25,12 +25,16 @@ async def safe_call(
     db: Database | None,
     chat_id: int | None,
     func: Callable[..., Awaitable[Any]],
+    /,
     *args: Any,
     **kwargs: Any,
 ) -> Any:
     """Вызывает метод Bot API, переживая типовые ошибки.
 
     Возвращает результат либо None, если доставить сообщение не удалось.
+
+    Первые три параметра позиционные: иначе `chat_id=` для вызываемого метода
+    столкнулся бы с нашим собственным аргументом.
     """
     for attempt in range(2):
         try:

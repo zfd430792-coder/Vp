@@ -15,6 +15,7 @@ from aiogram.methods import TelegramMethod
 from aiogram.types import (
     CallbackQuery,
     Chat,
+    Location,
     Message,
     MessageId,
     PhotoSize,
@@ -206,6 +207,19 @@ class Harness:
         )
         return self.session
 
+    async def send_location(self, user_id: int, lat: float, lon: float) -> MockSession:
+        message = Message(
+            message_id=next(self._message_id),
+            date=datetime.now(timezone.utc),
+            chat=Chat(id=user_id, type="private"),
+            from_user=self._user(user_id),
+            location=Location(latitude=lat, longitude=lon),
+        )
+        await self.dp.feed_update(
+            self.bot, Update(update_id=next(self._update_id), message=message)
+        )
+        return self.session
+
     async def click(self, user_id: int, data: str, *, message_text: str = "карточка") -> MockSession:
         message = Message(
             message_id=next(self._message_id),
@@ -225,6 +239,13 @@ class Harness:
             self.bot, Update(update_id=next(self._update_id), callback_query=query)
         )
         return self.session
+
+    async def set_state_data(self, user_id: int, **data: Any) -> None:
+        """Правит данные диалога напрямую — нужно для проверки таймеров."""
+        from aiogram.fsm.storage.base import StorageKey
+
+        key = StorageKey(bot_id=self.bot.id, chat_id=user_id, user_id=user_id)
+        await self.dp.fsm.storage.update_data(key=key, data=data)
 
     def restart(self) -> None:
         """Имитирует перезапуск бота: вся память процесса теряется, база остаётся.

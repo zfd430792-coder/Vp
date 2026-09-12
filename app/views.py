@@ -12,6 +12,8 @@ from app.constants import (
     MOD_OK,
     MOD_REJECTED,
     MOD_REVIEW,
+    RADIUS_CHOICES,
+    RADIUS_CITY,
     REPORT_CATEGORIES,
     ROLE_NAMES,
     SEEKING,
@@ -87,6 +89,9 @@ def profile_caption(
         title += " ✅"
     if city:
         title += f" · 📍 {city}"
+    distance = card.get("distance_text")
+    if distance:
+        title += f" · {esc(distance)}"
     lines.append(title)
 
     interests = interests_line(card.get("interests"))
@@ -143,18 +148,38 @@ def own_profile_text(
     return "\n".join(lines)
 
 
+def radius_title(profile: dict[str, Any]) -> str:
+    radius = int(profile.get("search_radius") or 0)
+    titles = dict(RADIUS_CHOICES)
+    if radius in titles:
+        return titles[radius]
+    return f"до {radius} км"
+
+
 def preferences_text(profile: dict[str, Any]) -> str:
     seeking = SEEKING.get(profile.get("seeking") or "any", "всех")
-    only_city = bool(profile.get("only_my_city"))
-    return (
-        "⚙️ <b>Фильтры поиска</b>\n\n"
-        f"👥 Показывать: <b>{seeking}</b>\n"
-        f"🎂 Возраст: <b>{profile.get('age_min', 18)}–{profile.get('age_max', 99)}</b>\n"
-        f"📍 Только мой город: <b>{'да' if only_city else 'нет'}</b>"
-        f"{' (' + esc(profile.get('city') or '') + ')' if only_city else ''}\n"
-        f"✅ Только подтверждённые анкеты: <b>{'да' if profile.get('only_verified') else 'нет'}</b>\n\n"
-        "Чем шире фильтры, тем больше анкет в ленте."
-    )
+    radius = int(profile.get("search_radius") or 0)
+    where = radius_title(profile)
+    if radius == RADIUS_CITY and profile.get("city"):
+        where += f" ({esc(profile['city'])})"
+
+    lines = [
+        "⚙️ <b>Фильтры поиска</b>",
+        "",
+        f"👥 Показывать: <b>{seeking}</b>",
+        f"🎂 Возраст: <b>{profile.get('age_min', 18)}–{profile.get('age_max', 99)}</b>",
+        f"📍 Где искать: <b>{where}</b>",
+        f"✅ Только подтверждённые: <b>{'да' if profile.get('only_verified') else 'нет'}</b>",
+    ]
+    if profile.get("lat") is None:
+        lines.append("")
+        lines.append(
+            "<i>Координат у анкеты нет: поиск по радиусу и расстояние до людей "
+            "недоступны. Укажи город из справочника или пришли местоположение.</i>"
+        )
+    lines.append("")
+    lines.append("Чем шире фильтры, тем больше анкет в ленте.")
+    return "\n".join(lines)
 
 
 def notifications_text(user: dict[str, Any]) -> str:

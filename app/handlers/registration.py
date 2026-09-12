@@ -13,8 +13,8 @@ from app.config import Config
 from app.constants import MAX_INTERESTS, MAX_PHOTOS, MOD_HOLD, MOD_OK, MOD_REVIEW
 from app.db import Database
 from app.handlers import ui
-from app.keyboards import inline
-from app.services import antifraud, notify, render
+from app.keyboards import inline, reply
+from app.services import antifraud, geo, notify, render
 from app.services import profiles as profiles_service
 from app.services import users as users_service
 from app.services.settings import Settings
@@ -23,7 +23,6 @@ from app.utils.text import (
     ValidationError,
     clean_age,
     clean_bio,
-    clean_city,
     clean_name,
     esc,
     has_contacts,
@@ -108,6 +107,11 @@ async def step_age(message: Message, state: FSMContext, db: Database, user: dict
     await message.answer(texts.ASK_GENDER, reply_markup=inline.gender())
 
 
+async def ask_city(message: Message, state: FSMContext) -> None:
+    await state.set_state(Reg.city)
+    await message.answer(texts.ASK_CITY, reply_markup=reply.city_input())
+
+
 @router.callback_query(Reg.gender, RegCB.filter(F.action == "gender"))
 async def step_gender(query: CallbackQuery, callback_data: RegCB, state: FSMContext) -> None:
     if callback_data.value not in {"m", "f"}:
@@ -126,22 +130,91 @@ async def step_seeking(query: CallbackQuery, callback_data: RegCB, state: FSMCon
         await query.answer()
         return
     await state.update_data(reg_seeking=callback_data.value)
-    await state.set_state(Reg.city)
     await query.answer()
     if query.message:
-        await query.message.edit_text(texts.ASK_CITY)
+        await query.message.edit_text("<b>Шаг 5/7 · Город</b>")
+        await ask_city(query.message, state)
+
+
+async def ask_interests(message: Message, state: FSMContext) -> None:
+    await state.set_state(Reg.interests)
+    data = await state.get_data()
+    chosen = list(data.get("reg_interests") or [])
+    await message.answer(texts.ASK_INTERESTS, reply_markup=inline.interests(chosen))
+
+
+async def save_city(
+    state: FSMContext,
+    *,
+    name: str,
+    lat: float | None = None,
+    lon: float | None = None,
+    source: str | None = None,
+) -> None:
+    await state.update_data(reg_city=name, reg_lat=lat, reg_lon=lon, reg_geo=source)
+
+
+@router.message(Reg.city, F.location)
+async def step_city_location(message: Message, state: FSMContext) -> None:
+    """Город по присланной точке. Саму точку округляем перед записью."""
+    location = message.location
+    if location is None:
+        return
+    lat, lon = geo.round_coords(location.latitude, location.longitude)
+    city = geo.nearest(lat, lon)
+    if city is None:
+        await message.answer(texts.CITY_LOCATION_UNKNOWN)
+        return
+
+    await save_city(state, name=city.name, lat=lat, lon=lon, source="location")
+    await message.answer(
+        texts.CITY_FROM_LOCATION.format(city=esc(city.title)), reply_markup=reply.remove
+    )
+    await ask_interests(message, state)
 
 
 @router.message(Reg.city, F.text)
 async def step_city(message: Message, state: FSMContext) -> None:
-    try:
-        city = clean_city(message.text or "")
-    except ValidationError as error:
-        await message.answer(f"⚠️ {error}")
+    resolution = geo.resolve_input(message.text)
+
+    if resolution.kind == "invalid":
+        await message.answer(f"⚠️ {resolution.error}")
         return
-    await state.update_data(reg_city=city)
-    await state.set_state(Reg.interests)
-    await message.answer(texts.ASK_INTERESTS, reply_markup=inline.interests(set()))
+
+    if resolution.kind == "choice":
+        await message.answer(
+            texts.CITY_CHOICE, reply_markup=inline.city_choice(resolution.matches)
+        )
+        return
+
+    if resolution.kind == "city" and resolution.city is not None:
+        city = resolution.city
+        await save_city(state, name=city.name, lat=city.lat, lon=city.lon, source="city")
+        await message.answer(
+            texts.CITY_SET.format(city=esc(city.title)), reply_markup=reply.remove
+        )
+    else:
+        await save_city(state, name=resolution.name)
+        await message.answer(
+            texts.CITY_FREE.format(city=esc(resolution.name)), reply_markup=reply.remove
+        )
+
+    await ask_interests(message, state)
+
+
+@router.callback_query(Reg.city, RegCB.filter(F.action == "city"))
+async def step_city_pick(
+    query: CallbackQuery, callback_data: RegCB, state: FSMContext
+) -> None:
+    city = geo.by_name(callback_data.value)
+    if city is None or query.message is None:
+        await query.answer(texts.CITY_NOT_FOUND, show_alert=True)
+        return
+
+    await save_city(state, name=city.name, lat=city.lat, lon=city.lon, source="city")
+    await query.answer()
+    await query.message.edit_text(texts.CITY_SET.format(city=esc(city.title)))
+    await ask_interests(query.message, state)
 
 
 @router.callback_query(Reg.interests, RegCB.filter(F.action == "interest"))
@@ -308,6 +381,9 @@ async def step_publish(
         seeking=data.get("reg_seeking") or "any",
         city=data.get("reg_city"),
         city_norm=normalize_city(str(data.get("reg_city") or "")),
+        lat=data.get("reg_lat"),
+        lon=data.get("reg_lon"),
+        geo_source=data.get("reg_geo"),
         bio=data.get("reg_bio") or "",
         interests=",".join(data.get("reg_interests") or []),
         is_visible=1,
@@ -366,10 +442,17 @@ async def step_publish(
 
 @router.message(Reg.name)
 @router.message(Reg.age)
-@router.message(Reg.city)
 @router.message(Reg.bio)
 async def step_wrong_type(message: Message) -> None:
     await message.answer("Здесь нужен текст 🙂 Напиши ответ сообщением.")
+
+
+@router.message(Reg.city)
+async def step_city_wrong_type(message: Message) -> None:
+    await message.answer(
+        "Напиши название города текстом или пришли местоположение кнопкой ниже.",
+        reply_markup=reply.city_input(),
+    )
 
 
 @router.message(Reg.photos)

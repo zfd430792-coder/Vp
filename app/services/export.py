@@ -74,7 +74,21 @@ async def build(db: Database, user_id: int) -> dict[str, Any] | None:
             "о_себе": profile.get("bio"),
             "интересы": interests,
             "фильтр_возраста": [profile.get("age_min"), profile.get("age_max")],
-            "только_мой_город": bool(profile.get("only_my_city")),
+            "где_искать": (
+                "только мой город"
+                if int(profile.get("search_radius") or 0) == 0
+                else (
+                    "без ограничений"
+                    if int(profile.get("search_radius") or 0) >= 999
+                    else f"до {profile.get('search_radius')} км"
+                )
+            ),
+            "координаты_города": (
+                [profile.get("lat"), profile.get("lon")]
+                if profile.get("lat") is not None
+                else None
+            ),
+            "откуда_координаты": profile.get("geo_source"),
             "только_подтверждённые": bool(profile.get("only_verified")),
             "показ_в_поиске": bool(profile.get("is_visible")),
             "статус_модерации": profile.get("moderation"),

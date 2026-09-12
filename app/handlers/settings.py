@@ -11,7 +11,7 @@ from aiogram.types import BufferedInputFile, CallbackQuery, Message
 from app import texts, views
 from app.callbacks import SettingsCB
 from app.config import Config
-from app.constants import MAX_AGE, MIN_AGE
+from app.constants import MAX_AGE, MIN_AGE, RADIUS_ANY, RADIUS_CHOICES, RADIUS_CITY
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline
@@ -147,15 +147,53 @@ async def save_age_range(
         )
 
 
-@router.callback_query(SettingsCB.filter(F.action == "toggle_city"))
-async def toggle_city(query: CallbackQuery, db: Database, user: dict[str, Any]) -> None:
+@router.callback_query(SettingsCB.filter(F.action == "radius_menu"))
+async def radius_menu(query: CallbackQuery, db: Database, user: dict[str, Any]) -> None:
     profile = await profiles_service.get(db, int(user["id"]))
-    if not profile:
+    if not profile or query.message is None:
         await query.answer()
         return
-    new_value = 0 if profile.get("only_my_city") else 1
-    await profiles_service.update(db, int(user["id"]), only_my_city=new_value)
-    await query.answer("Только мой город: " + ("да" if new_value else "нет"))
+
+    text = ["📍 <b>Где искать</b>", ""]
+    if profile.get("lat") is None:
+        text.append(
+            "У анкеты нет координат, поэтому поиск по радиусу работать не будет. "
+            "Укажи город из справочника или пришли местоположение в разделе «Моя анкета»."
+        )
+    else:
+        text.append("Радиус считается от твоего города или присланной точки.")
+        text.append("Люди, у которых радиус меньше, тебя не увидят — это честно в обе стороны.")
+    await query.answer()
+    await query.message.edit_text(
+        "\n".join(text), reply_markup=inline.radius_menu(int(profile.get("search_radius") or 0))
+    )
+
+
+@router.callback_query(SettingsCB.filter(F.action == "radius"))
+async def set_radius(
+    query: CallbackQuery, callback_data: SettingsCB, db: Database, user: dict[str, Any]
+) -> None:
+    allowed = {value for value, _ in RADIUS_CHOICES}
+    try:
+        radius = int(callback_data.value)
+    except (TypeError, ValueError):
+        await query.answer()
+        return
+    if radius not in allowed:
+        await query.answer()
+        return
+
+    profile = await profiles_service.get(db, int(user["id"]))
+    if profile and radius not in (RADIUS_CITY, RADIUS_ANY) and profile.get("lat") is None:
+        await query.answer(
+            "Для поиска по радиусу нужны координаты: укажи город из справочника "
+            "или пришли местоположение.",
+            show_alert=True,
+        )
+        return
+
+    await profiles_service.update(db, int(user["id"]), search_radius=radius)
+    await query.answer("Сохранено")
     profile = await profiles_service.get(db, int(user["id"]))
     if profile and query.message:
         await query.message.edit_text(

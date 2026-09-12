@@ -20,13 +20,23 @@ from app.constants import (
     MAX_INTERESTS,
     MOD_OK,
     MOD_REVIEW,
+    RADIUS_ANY,
     STATUS_ACTIVE,
 )
 from app.db import Database
+from app.services import geo
 from app.services.settings import Settings
 from app.utils.time import now
 
-_BASE_FILTERS = """
+# Квадрат расстояния в градусах. Тригонометрии в SQL нет намеренно: функции sin/cos
+# собраны не в каждой сборке SQLite, поэтому сжатие долготы считаем в Python и
+# передаём готовым коэффициентом :cos2. Для сравнения и сортировки корень не нужен.
+DIST2 = (
+    "((p.lat - :my_lat) * (p.lat - :my_lat)"
+    " + (p.lon - :my_lon) * (p.lon - :my_lon) * :cos2)"
+)
+
+_BASE_FILTERS = f"""
         FROM profiles p
         JOIN users u ON u.id = p.user_id
        WHERE p.user_id != :me
@@ -44,8 +54,29 @@ _BASE_FILTERS = """
          AND p.age_min <= :my_age
          AND p.age_max >= :my_age
          AND (:only_verified = 0 OR u.verified = 1)
-         AND (:only_my_city = 0 OR p.city_norm = :my_city)
-         AND (p.only_my_city = 0 OR :my_city = '' OR p.city_norm = :my_city)
+         AND (
+               :radius >= 999
+            OR (:radius = 0 AND (:my_city = '' OR p.city_norm = :my_city))
+            OR (
+                 :radius > 0 AND :radius < 999
+                 AND (
+                       :my_lat IS NULL
+                    OR (p.lat IS NOT NULL AND {DIST2} <= :my_max_deg2)
+                 )
+               )
+         )
+         AND (
+               p.search_radius >= 999
+            OR (p.search_radius = 0 AND (:my_city = '' OR p.city_norm = :my_city))
+            OR (
+                 p.search_radius > 0 AND p.search_radius < 999
+                 AND (
+                       :my_lat IS NULL
+                    OR p.lat IS NULL
+                    OR {DIST2} <= (p.search_radius / 111.2) * (p.search_radius / 111.2)
+                 )
+               )
+         )
          AND NOT EXISTS (
                 SELECT 1 FROM likes l
                  WHERE l.from_id = :me AND l.to_id = p.user_id
@@ -62,7 +93,13 @@ _BASE_FILTERS = """
 def _params(user: dict[str, Any], profile: dict[str, Any], settings: Settings) -> dict[str, Any]:
     moment = now()
     my_city = (profile.get("city_norm") or "").strip()
-    only_my_city = 1 if (profile.get("only_my_city") and my_city) else 0
+    my_lat = profile.get("lat")
+    my_lon = profile.get("lon")
+    radius = int(profile.get("search_radius") or 0)
+    if radius == 0 and not my_city:
+        radius = RADIUS_ANY  # города нет — ограничивать нечем, показываем всех
+
+    max_deg = (radius / 111.2) if 0 < radius < RADIUS_ANY else 0.0
     return {
         "me": int(user["id"]),
         "now": moment,
@@ -78,7 +115,11 @@ def _params(user: dict[str, Any], profile: dict[str, Any], settings: Settings) -
         "my_gender": profile.get("gender") or "",
         "my_age": int(profile.get("age") or 18),
         "my_city": my_city,
-        "only_my_city": only_my_city,
+        "radius": radius,
+        "my_lat": my_lat,
+        "my_lon": my_lon,
+        "cos2": geo.cos_lat(float(my_lat)) ** 2 if my_lat is not None else 1.0,
+        "my_max_deg2": max_deg * max_deg,
         "only_verified": 1 if profile.get("only_verified") else 0,
         "fresh_cutoff": moment - max(0, settings.get_int("fresh_profile_boost_days", 3)) * 86400,
     }
@@ -120,6 +161,8 @@ async def next_candidate(
                    CASE WHEN u.shadow_level > 0 AND COALESCE(u.shadow_until, 0) > :now
                         THEN u.shadow_level ELSE 0 END AS shadow,
                    {relevance} AS relevance,
+                   CASE WHEN p.lat IS NOT NULL AND :my_lat IS NOT NULL
+                        THEN {DIST2} ELSE NULL END AS dist2,
                    CASE
                        WHEN u.last_active_at > :now - 86400 THEN 0
                        WHEN u.last_active_at > :now - 604800 THEN 1
@@ -144,6 +187,8 @@ async def next_candidate(
                  c.liked_me DESC,
                  c.shadow ASC,
                  c.activity ASC,
+                 CASE WHEN :radius > 0 AND :radius < 999 AND c.dist2 IS NOT NULL
+                      THEN c.dist2 ELSE 0 END ASC,
                  c.relevance DESC,
                  RANDOM()
         LIMIT 1

@@ -45,6 +45,7 @@ async def show_next_like(
 
     target_id = int(candidate["user_id"])
     candidate["photos"] = await profiles_service.photos(db, target_id)
+    ui.attach_distance(candidate, await profiles_service.get(db, user_id))
     remaining = await likes_service.incoming_count(db, user_id)
 
     footer = None

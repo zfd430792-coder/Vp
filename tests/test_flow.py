@@ -24,6 +24,7 @@ from app.services import (
     antifraud,
     chat,
     feed,
+    geo,
     insights,
     likes,
     limits,
@@ -88,7 +89,7 @@ async def make_user(
     city: str = "Москва",
     bio: str = "Обычное описание для теста: люблю горы, кофе и настольные игры.",
     photos: int = 2,
-    only_my_city: int = 1,
+    search_radius: int = 0,
 ) -> None:
     await users.ensure(db, user_id, username=f"user{user_id}", tg_name=name)
     await users.accept_rules(db, user_id)
@@ -102,7 +103,7 @@ async def make_user(
         seeking=seeking,
         city=city,
         bio=bio,
-        only_my_city=only_my_city,
+        search_radius=search_radius,
         age_min=18,
         age_max=99,
     )
@@ -154,17 +155,17 @@ async def main() -> None:
     available = await feed.count_available(db, settings, user1, profile1)
     check("фильтр возраста работает", available == 2, f"available={available}")
 
-    await profiles.update(db, 1001, only_my_city=0)
+    await profiles.update(db, 1001, search_radius=999)
     profile1 = await profiles.get(db, 1001)
     available = await feed.count_available(db, settings, user1, profile1)
-    check("без фильтра города Ника не появляется (её фильтр города)", available == 2, f"{available}")
+    check("без ограничения города Ника не появляется (её фильтр города)", available == 2, f"{available}")
 
-    await profiles.update(db, 1005, only_my_city=0)
+    await profiles.update(db, 1005, search_radius=999)
     profile1 = await profiles.get(db, 1001)
     available = await feed.count_available(db, settings, user1, profile1)
     check("взаимный фильтр города учтён", available == 3, f"available={available}")
 
-    await profiles.update(db, 1001, only_my_city=1, age_min=18, age_max=99)
+    await profiles.update(db, 1001, search_radius=0, age_min=18, age_max=99)
     profile1 = await profiles.get(db, 1001)
     candidate = await feed.next_candidate(db, settings, user1, profile1)
     check("кандидат найден", candidate is not None and candidate["gender"] == "f")
@@ -425,7 +426,7 @@ async def main() -> None:
 
     print("\n▶ Релевантность ленты")
     await make_user(db, 2001, name="Ищущий", age=28, gender="m", seeking="f")
-    await profiles.update(db, 2001, interests="music,travel,sport", only_my_city=1)
+    await profiles.update(db, 2001, interests="music,travel,sport", search_radius=0)
     await make_user(db, 2002, name="Совпадает", age=26, gender="f", seeking="m")
     await profiles.update(db, 2002, interests="music,travel,sport")
     await make_user(db, 2003, name="Не совпадает", age=26, gender="f", seeking="m")
@@ -449,6 +450,79 @@ async def main() -> None:
     candidate = await feed.next_candidate(db, settings, seeker, seeker_profile)
     check("показывается только подтверждённая анкета", candidate and int(candidate["user_id"]) == 2003)
     await profiles.update(db, 2001, only_verified=0)
+
+    print("\n▶ Города и расстояния")
+    check("точное название", geo.find("Москва")[0].name == "Москва")
+    check("сокращение", geo.find("мск")[0].name == "Москва")
+    check("приставка «г.» не мешает", geo.find("г. Сочи")[0].name == "Сочи")
+    check("пробел вместо дефиса", geo.find("Санкт петербург")[0].name == "Санкт-Петербург")
+    check("по началу названия", geo.find("новоси")[0].name == "Новосибирск")
+    several = geo.find("нов")
+    check("несколько совпадений", len(several) >= 3, str([c.name for c in several]))
+    check("поиск по региону", any(c.region.startswith("Московская") for c in geo.find("Московская область")))
+    check("поиск по стране", all(c.country == "Беларусь" for c in geo.find("Беларусь")))
+    check("выдуманный город не находится", geo.find("Вымышленовка") == [])
+    check("Горно-Алтайск не съеден приставкой", geo.find("Горно-Алтайск")[0].name == "Горно-Алтайск")
+
+    resolved = geo.resolve_input("мск")
+    check("разбор ввода: город", resolved.kind == "city" and resolved.city.name == "Москва")
+    check("разбор ввода: выбор", geo.resolve_input("нов").kind == "choice")
+    free = geo.resolve_input("Вымышленовка")
+    check("разбор ввода: свободный текст", free.kind == "free" and free.name == "Вымышленовка")
+    check("разбор ввода: мусор", geo.resolve_input("12345").kind == "invalid")
+
+    spb_km = geo.distance_km(55.75, 37.62, 59.94, 30.31)
+    check("Москва–Петербург около 630 км", 600 <= spb_km <= 680, f"{spb_km:.0f}")
+    himki_km = geo.distance_km(55.75, 37.62, 55.90, 37.43)
+    check("Москва–Химки около 20 км", 10 <= himki_km <= 30, f"{himki_km:.0f}")
+    check("ближе пяти километров — «рядом»", geo.format_distance(3) == "рядом")
+    check("десятки километров округляются", geo.format_distance(23) == "~25 км")
+    check("сотни километров округляются", geo.format_distance(631) == "~650 км")
+    check("ближайший город найден", geo.nearest(55.8, 37.5).name == "Москва")
+    check("в океане города нет", geo.nearest(0.0, 0.0) is None)
+    check("координаты округляются", geo.round_coords(55.7558123, 37.6172999) == (55.76, 37.62))
+    check("коэффициент долготы посчитан", 0.5 < geo.cos_lat(55.75) < 0.6, str(geo.cos_lat(55.75)))
+
+    print("\n▶ Поиск по радиусу")
+    await make_user(db, 3001, name="Радиус", age=30, gender="m", seeking="f", city="Москва")
+    await profiles.update(db, 3001, lat=55.75, lon=37.62, geo_source="city", search_radius=50)
+    await make_user(db, 3002, name="Рядом", age=27, gender="f", seeking="m", city="Химки")
+    await profiles.update(db, 3002, lat=55.90, lon=37.43, geo_source="city", search_radius=999)
+    await make_user(db, 3003, name="Далеко", age=27, gender="f", seeking="m", city="Тула")
+    await profiles.update(db, 3003, lat=54.19, lon=37.62, geo_source="city", search_radius=999)
+    for uid in (3001, 3002, 3003):
+        await db.execute("UPDATE users SET last_active_at = ? WHERE id = ?", (now(), uid))
+
+    seeker = await users.get(db, 3001)
+    check(
+        "радиус 50 км оставляет только ближнюю",
+        await feed.count_available(db, settings, seeker, await profiles.get(db, 3001)) == 1,
+    )
+    await profiles.update(db, 3001, search_radius=300)
+    check(
+        "радиус 300 км добавляет дальнюю",
+        await feed.count_available(db, settings, seeker, await profiles.get(db, 3001)) == 2,
+    )
+    await profiles.update(db, 3002, search_radius=10)
+    check(
+        "чужой узкий радиус тоже уважается",
+        await feed.count_available(db, settings, seeker, await profiles.get(db, 3001)) == 1,
+    )
+    await profiles.update(db, 3001, search_radius=0)
+    mine = await profiles.get(db, 3001)
+    # В Москве есть анкеты из более ранних сценариев, поэтому проверяем не число,
+    # а именно исключение: Химки и Тула при «только мой город» появиться не могут
+    seen_ids: set[int] = set()
+    for _ in range(15):
+        candidate = await feed.next_candidate(db, settings, seeker, mine)
+        if candidate:
+            seen_ids.add(int(candidate["user_id"]))
+    check(
+        "при «только мой город» другие города исключены",
+        3002 not in seen_ids and 3003 not in seen_ids,
+        str(sorted(seen_ids)),
+    )
+    check("но кто-то из своего города находится", bool(seen_ids), "выборка пуста")
 
     print("\n▶ Статистика анкеты")
     await insights.bump(db, 2002, "shown", 5)

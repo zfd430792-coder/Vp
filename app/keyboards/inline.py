@@ -22,9 +22,11 @@ from app.constants import (
     GENDER_ICONS,
     GENDERS,
     INTERESTS,
+    RADIUS_CHOICES,
     REPORT_CATEGORIES,
     ROLE_NAMES,
 )
+from app.services import geo
 from app.utils.text import shorten
 
 # --------------------------------------------------------------------------- регистрация
@@ -39,9 +41,21 @@ def rules() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def warning_accept() -> InlineKeyboardMarkup:
+    """Кнопки под предупреждением. Показываются не сразу — после паузы на чтение."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Принимаю правила", callback_data=RegCB(action="rules_ok"))
+    builder.button(text="🛡 Подробнее о безопасности", callback_data=RegCB(action="safety"))
+    builder.button(text="❌ Не согласен", callback_data=RegCB(action="rules_no"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def after_safety() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="⬅️ Вернуться к правилам", callback_data=RegCB(action="rules_back"))
+    builder.button(text="✅ Принимаю правила", callback_data=RegCB(action="rules_ok"))
+    builder.button(text="⬅️ Назад к предупреждению", callback_data=RegCB(action="rules_back"))
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -93,6 +107,36 @@ def interests(selected: Iterable[str], *, editing: bool = False) -> InlineKeyboa
         else RegCB(action="interests_done")
     )
     builder.row(InlineKeyboardButton(text="➡️ Готово", callback_data=done.pack()))
+    return builder.as_markup()
+
+
+def city_choice(matches: Sequence[Any], *, editing: bool = False) -> InlineKeyboardMarkup:
+    """Выбор города из найденных совпадений."""
+    builder = InlineKeyboardBuilder()
+    for city in matches:
+        value = geo.normalize(city.name)
+        callback = (
+            ProfileCB(action="city_pick", value=value)
+            if editing
+            else RegCB(action="city", value=value)
+        )
+        builder.button(text=city.title, callback_data=callback)
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def radius_menu(current: int) -> InlineKeyboardMarkup:
+    """Радиус поиска: от «только мой город» до «без ограничений»."""
+    builder = InlineKeyboardBuilder()
+    for value, title in RADIUS_CHOICES:
+        mark = "✅ " if value == current else ""
+        builder.button(
+            text=f"{mark}{title}", callback_data=SettingsCB(action="radius", value=str(value))
+        )
+    builder.adjust(1)
+    builder.row(
+        InlineKeyboardButton(text="⬅️ Назад", callback_data=SettingsCB(action="filters").pack())
+    )
     return builder.as_markup()
 
 
@@ -355,10 +399,11 @@ def filters_menu(profile: dict[str, Any]) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="👥 Кого показывать", callback_data=SettingsCB(action="seeking_menu"))
     builder.button(text="🎂 Возраст", callback_data=SettingsCB(action="age_menu"))
-    city_state = "да" if profile.get("only_my_city") else "нет"
+    radius = int(profile.get("search_radius") or 0)
+    radius_title = dict(RADIUS_CHOICES).get(radius, f"до {radius} км")
     builder.button(
-        text=f"📍 Только мой город: {city_state}",
-        callback_data=SettingsCB(action="toggle_city"),
+        text=f"📍 Где искать: {radius_title}",
+        callback_data=SettingsCB(action="radius_menu"),
     )
     verified_state = "да" if profile.get("only_verified") else "нет"
     builder.button(

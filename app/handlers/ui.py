@@ -11,7 +11,7 @@ from app.constants import ROLE_MODERATOR
 from app.db import Database
 from app.keyboards import inline, reply
 from app.services import feed as feed_service
-from app.services import insights, notify, render
+from app.services import geo, insights, notify, render
 from app.services import likes as likes_service
 from app.services import limits as limits_service
 from app.services import profiles as profiles_service
@@ -29,6 +29,19 @@ async def leave_chat_mode(db: Database, state: FSMContext, user_id: int) -> None
 
     await chat_service.close_chat(db, user_id)
     await state.set_state(None)
+
+
+def attach_distance(card: dict[str, Any], viewer: dict[str, Any] | None) -> None:
+    """Дописывает в карточку примерное расстояние, если координаты есть у обоих."""
+    if not viewer:
+        return
+    values = (viewer.get("lat"), viewer.get("lon"), card.get("lat"), card.get("lon"))
+    if any(value is None for value in values):
+        return
+    my_lat, my_lon, their_lat, their_lon = (float(value) for value in values)
+    card["distance_text"] = geo.format_distance(
+        geo.distance_km(my_lat, my_lon, their_lat, their_lon)
+    )
 
 
 async def clear_ui(bot: Bot, state: FSMContext, chat_id: int) -> None:
@@ -95,6 +108,7 @@ async def show_next_profile(
 
     target_id = int(candidate["user_id"])
     candidate["photos"] = await profiles_service.photos(db, target_id)
+    attach_distance(candidate, profile)
     quota = await limits_service.quota(db, user, settings)
 
     footer_parts = []

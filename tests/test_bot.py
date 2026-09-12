@@ -8,6 +8,7 @@ import asyncio
 import json
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -30,6 +31,7 @@ CARL = 300
 DINA = 400
 NEWBIE = 500
 EMMA = 600
+GEO = 800
 OWNER = 1
 
 
@@ -71,34 +73,78 @@ async def main() -> None:
     await db.connect()
     settings = Settings(db)
     await settings.load()
+    # Пауза на чтение предупреждения проверяется отдельно, остальным сценариям она мешает
+    await settings.set("warning_delay", "0")
     config = Config(token="1:x", owner_ids=(OWNER,), db_path=tmp, support_contact="@help")
     await users.sync_owners(db, (OWNER,))
     harness = Harness(db, settings, config)
     session = harness.session
 
-    print("\n▶ Первый запуск и правила")
+    print("\n▶ Первый запуск: приветствие, потом предупреждение")
     session.clear()
     await harness.send(ALICE, "/start")
-    check("приветствие показано", has(session, "Это бот знакомств", ALICE))
-    check("правила показаны", has(session, "Правила", ALICE))
-    check("есть кнопка безопасности", "reg:safety:" in session.buttons(ALICE))
+    texts_seen = session.texts(ALICE)
+    check("приветствие показано первым", "Это бот знакомств" in texts_seen[0], texts_seen[0][:40])
+    check("предупреждение идёт после приветствия", has(session, "Прочитай перед началом", ALICE))
+    check("в предупреждении есть возраст 18+", has(session, "18 лет", ALICE))
+    check("в предупреждении есть про деньги", has(session, "Денег здесь никто не просит", ALICE))
+    check("в предупреждении есть про шантаж", has(session, "не плати", ALICE))
+    check("сказано, что переписку без жалобы не читают", has(session, "никто не читает", ALICE))
+    check("есть кнопка согласия", "reg:rules_ok:" in session.all_buttons(ALICE))
+    check("есть кнопка безопасности", "reg:safety:" in session.all_buttons(ALICE))
 
     session.clear()
     await harness.click(ALICE, "reg:safety:")
     check("памятка о мошенниках открывается", has(session, "Признаки мошенника"))
-    check("есть предупреждение о шантаже", has(session, "шантаж"))
     check("сказано не платить шантажисту", has(session, "Не плати"))
+    check("из памятки можно сразу принять правила", "reg:rules_ok:" in session.all_buttons(ALICE))
 
     session.clear()
     await harness.click(ALICE, "reg:rules_back:")
+    check("возврат к предупреждению работает", has(session, "Прочитай перед началом", ALICE))
     await harness.click(ALICE, "reg:rules_no:")
-    check("отказ от правил обрабатывается", has(session, "Без согласия с правилами"))
+    check("отказ обрабатывается", has(session, "Без согласия с правилами"))
     stored = await users.get(db, ALICE)
     check("правила не приняты при отказе", not stored.get("rules_accepted_at"))
+
+    print("\n▶ Кнопка появляется только после паузы на чтение")
+    await settings.set("warning_delay", "2")
+    session.clear()
+    await harness.send(700, "/start")
+    warning_calls = [
+        payload
+        for name, payload in session.calls
+        if name == "SendMessage" and "Прочитай перед началом" in (payload.get("text") or "")
+    ]
+    check("предупреждение отправлено без кнопок", bool(warning_calls) and not warning_calls[0].get("reply_markup"))
+    check("видно, сколько ждать", any("Кнопка появится через" in (p.get("text") or "") for p in warning_calls))
+    edits = [
+        payload
+        for name, payload in session.calls
+        if name == "EditMessageText" and payload.get("reply_markup")
+    ]
+    check("после отсчёта кнопка появилась", bool(edits))
+    if edits:
+        markup = edits[-1].get("reply_markup") or {}
+        codes = [
+            button.get("callback_data")
+            for row in markup.get("inline_keyboard", [])
+            for button in row
+        ]
+        check("это кнопка согласия", "reg:rules_ok:" in codes, str(codes))
+    check("шло не меньше двух правок отсчёта", len([n for n, _ in session.calls if n == "EditMessageText"]) >= 2)
+
+    session.clear()
+    await harness.set_state_data(700, warning_at=int(time.time()))
+    await harness.click(700, "reg:rules_ok:")
+    check("досрочное нажатие отклоняется", any("Дочитай" in a for a in session.alerts()))
+    check("правила при этом не приняты", not (await users.get(db, 700)).get("rules_accepted_at"))
+    await settings.set("warning_delay", "0")
 
     print("\n▶ Регистрация")
     session.clear()
     await harness.send(ALICE, "/start")
+    check("приветствие показывается снова", has(session, "Это бот знакомств", ALICE))
     await harness.click(ALICE, "reg:rules_ok:")
     check("начался шаг с именем", has(session, "Шаг 1/7"))
 
@@ -154,6 +200,47 @@ async def main() -> None:
     check("имя сохранено", profile["name"] == "Аня", str(profile["name"]))
     check("город сохранён", profile["city"] == "Москва", str(profile["city"]))
     check("фото сохранены", await profiles.count_photos(db, ALICE) == 2)
+
+    session.clear()
+    await harness.send(ALICE, "/start")
+    check("с анкетой /start здоровается по имени", has(session, "С возвращением, Аня", ALICE))
+    check("предупреждение больше не показывают", not has(session, "Прочитай перед началом", ALICE))
+    menu_calls = [
+        payload
+        for name, payload in session.calls
+        if name == "SendMessage" and (payload.get("reply_markup") or {}).get("keyboard")
+    ]
+    check("меню появилось", bool(menu_calls))
+    if menu_calls:
+        labels = [
+            button.get("text")
+            for row in menu_calls[-1]["reply_markup"]["keyboard"]
+            for button in row
+        ]
+        check("в меню есть поиск анкет", any("Смотреть анкеты" in str(x) for x in labels), str(labels))
+        check("в меню есть своя анкета", any("Моя анкета" in str(x) for x in labels))
+        check("в меню есть настройки", any("Настройки" in str(x) for x in labels))
+
+    # Модератору в том же меню добавляется вход в админ-панель
+    await users.set_role(db, ALICE, 1)
+    session.clear()
+    await harness.send(ALICE, "/start")
+    staff_menu = [
+        payload
+        for name, payload in session.calls
+        if name == "SendMessage" and (payload.get("reply_markup") or {}).get("keyboard")
+    ]
+    staff_labels = [
+        button.get("text")
+        for row in (staff_menu[-1]["reply_markup"]["keyboard"] if staff_menu else [])
+        for button in row
+    ]
+    check(
+        "модератору в меню добавляется админ-панель",
+        any("Админ-панель" in str(x) for x in staff_labels),
+        str(staff_labels),
+    )
+    await users.set_role(db, ALICE, 0)
 
     print("\n▶ Второй пользователь и лента")
     await register(harness, BORIS, name="Борис", age=27, gender="m", seeking="f")
@@ -356,8 +443,10 @@ async def main() -> None:
     await harness.click(ALICE, "st:age_set:18-35")
     updated = await profiles.get(db, ALICE)
     check("возрастной фильтр сохранён", updated["age_min"] == 18 and updated["age_max"] == 35)
-    await harness.click(ALICE, "st:toggle_city:")
-    check("фильтр города переключается", (await profiles.get(db, ALICE))["only_my_city"] == 0)
+    await harness.click(ALICE, "st:radius_menu:")
+    check("меню радиуса открылось", has(session, "Где искать", ALICE))
+    await harness.click(ALICE, "st:radius:999")
+    check("радиус сохранён", (await profiles.get(db, ALICE))["search_radius"] == 999)
 
     session.clear()
     await harness.click(ALICE, "st:notify:")
@@ -401,6 +490,100 @@ async def main() -> None:
     session.clear()
     await harness.send(ALICE, "что-то непонятное")
     check("бот не молчит на непонятное", has(session, "Выбери действие", ALICE))
+
+    print("\n▶ Город: распознавание и геопозиция")
+    session.clear()
+    await harness.send(GEO, "/start")
+    await harness.click(GEO, "reg:rules_ok:")
+    await harness.send(GEO, "Гео")
+    await harness.send(GEO, "28")
+    await harness.click(GEO, "reg:gender:m")
+    await harness.click(GEO, "reg:seeking:f")
+    check("на шаге города предлагают прислать место", has(session, "местоположению", GEO))
+    location_button = [
+        payload
+        for name, payload in session.calls
+        if name == "SendMessage" and (payload.get("reply_markup") or {}).get("keyboard")
+    ]
+    has_geo_button = any(
+        button.get("request_location")
+        for payload in location_button
+        for row in payload["reply_markup"]["keyboard"]
+        for button in row
+    )
+    check("кнопка «отправить местоположение» есть", has_geo_button)
+
+    session.clear()
+    await harness.send(GEO, "нов")
+    check("по части названия предложен выбор", has(session, "какой именно город", GEO))
+    choices = [b for b in session.all_buttons(GEO) if b.startswith("reg:city:")]
+    check("в выборе несколько городов", len(choices) >= 3, str(choices[:3]))
+
+    session.clear()
+    await harness.send(GEO, "мск")
+    check("сокращение распознано как Москва", has(session, "Город: <b>Москва</b>", GEO))
+    check("после города спрашивают интересы", has(session, "Шаг 6/7", GEO))
+
+    session.clear()
+    await harness.click(GEO, "reg:interests_done:")
+    await harness.send(GEO, "Люблю долгие прогулки и хороший кофе по утрам.")
+    await harness.send(GEO, "", photo="geo_1")
+    await harness.click(GEO, "reg:photos_done:")
+    await harness.click(GEO, "reg:publish:")
+    geo_profile = await profiles.get(db, GEO)
+    check("город сохранён канонично", geo_profile["city"] == "Москва", str(geo_profile["city"]))
+    check("координаты подставлены из справочника", geo_profile["lat"] is not None)
+    check("источник координат — справочник", geo_profile["geo_source"] == "city")
+
+    print("\n▶ Город по присланной точке")
+    session.clear()
+    await harness.send(GEO, "👤 Моя анкета")
+    await harness.click(GEO, "pf:city:")
+    await harness.send_location(GEO, 59.93, 30.34)  # Санкт-Петербург
+    check("город определён по точке", has(session, "Санкт-Петербург", GEO))
+    moved = await profiles.get(db, GEO)
+    check("город обновлён", moved["city"] == "Санкт-Петербург", str(moved["city"]))
+    check("координаты от человека", moved["geo_source"] == "location")
+    check(
+        "точка округлена до сотых",
+        moved["lat"] == round(moved["lat"], 2) and moved["lat"] != 59.93456,
+        str(moved["lat"]),
+    )
+
+    session.clear()
+    await harness.click(GEO, "pf:city:")
+    await harness.send(GEO, "Вымышленовка")
+    check("неизвестный город принимается как есть", has(session, "Записал", GEO))
+    check("сказано про расстояние", has(session, "расстояние", GEO))
+    free_city = await profiles.get(db, GEO)
+    check("свободный город без координат", free_city["lat"] is None, str(free_city["lat"]))
+
+    print("\n▶ Расстояние и радиус поиска")
+    await harness.click(GEO, "pf:city:")
+    await harness.send(GEO, "Химки")
+    himki = await profiles.get(db, GEO)
+    check("Химки распознаны", himki["city"] == "Химки" and himki["lat"] is not None)
+
+    await profiles.update(db, GEO, seeking="f", search_radius=50)
+    session.clear()
+    await harness.send(GEO, "🔍 Смотреть анкеты")
+    check("в карточке видно расстояние", has(session, "км", GEO) or has(session, "рядом", GEO))
+
+    await profiles.update(db, GEO, search_radius=25)
+    geo_user = await users.get(db, GEO)
+    near = await feed.count_available(db, settings, geo_user, await profiles.get(db, GEO))
+    await profiles.update(db, GEO, search_radius=999)
+    far = await feed.count_available(db, settings, geo_user, await profiles.get(db, GEO))
+    check("радиус 25 км сужает выборку", near <= far, f"{near} против {far}")
+
+    session.clear()
+    await harness.send(GEO, "⚙️ Настройки")
+    await harness.click(GEO, "st:filters:")
+    check("в фильтрах видно, где искать", has(session, "Где искать", GEO))
+    await harness.click(GEO, "st:radius_menu:")
+    await harness.click(GEO, "st:radius:100")
+    check("радиус сохранён", (await profiles.get(db, GEO))["search_radius"] == 100)
+    check("честно сказано про взаимность радиуса", has(session, "радиус меньше", GEO))
 
     print("\n▶ Суперлайк с сообщением")
     await register(harness, DINA, name="Дина", age=26, gender="f", seeking="m")
