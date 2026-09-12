@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.ruff_cache/
 .venv/
 venv/
 env/
@@ -8,8 +9,8 @@ env/
 *.db
 *.db-wal
 *.db-shm
-data/
-logs/
+/data/
+/logs/
 *.log
 .idea/
 .vscode/

@@ -66,6 +66,21 @@ step() {
     ui_step "$step_no/$TOTAL_STEPS" "$1"
 }
 
+# Проверка кода до перезапуска: импортируем весь проект в отдельном процессе.
+# Битый или неполный код (например, потерянный модуль) так и не доберётся до
+# работающего бота — падать будет проверка, а не живой процесс.
+preflight() {
+    PREFLIGHT_OUT="$("$PY" -c 'import bot' 2>&1)"
+    [ -z "$PREFLIGHT_OUT" ]
+}
+
+show_preflight_error() {
+    ui_note "код не проходит проверку — перезапускать нельзя, иначе бот упадёт:"
+    ui_blank
+    printf '%s\n' "$PREFLIGHT_OUT" | tail -n 6 | ui_trim | sed 's/^/         /'
+    ui_blank
+}
+
 die() {
     ui_blank
     ui_fail "$1"
@@ -159,6 +174,7 @@ if [ "$OLD_COMMIT" = "$REMOTE_COMMIT" ]; then
     RUNNING="$(cat "$RUNNING_FILE" 2>/dev/null | tr -d ' \r\n')"
     CURRENT="${OLD_COMMIT:0:7}"
     NEED_RESTART=0
+    RESTART_BLOCKED=0
     if ! "$PROJECT_DIR/manage.sh" is-running; then
         ui_warn "бот сейчас не работает — запускаю"
         NEED_RESTART=1
@@ -171,6 +187,13 @@ if [ "$OLD_COMMIT" = "$REMOTE_COMMIT" ]; then
         NEED_RESTART=1
     else
         ui_ok "бот работает на этой же версии, перезапуск не нужен"
+    fi
+
+    if [ "$NEED_RESTART" -eq 1 ] && ! preflight; then
+        show_preflight_error
+        ui_note "скорее всего код правили вручную: git status, затем git checkout -- ."
+        NEED_RESTART=0
+        RESTART_BLOCKED=1
     fi
 
     if [ "$NEED_RESTART" -eq 1 ]; then
@@ -188,12 +211,20 @@ if [ "$OLD_COMMIT" = "$REMOTE_COMMIT" ]; then
     ui_blank
     ui_rule
     ui_blank
-    ui_head "✅  Всё на свежей версии"
-    ui_blank
-    if [ "$NEED_RESTART" -eq 1 ]; then
-        ui_text "Код был актуальный, но процесс работал на старом — перезапустил."
+    if [ "$RESTART_BLOCKED" -eq 1 ]; then
+        ui_head "⚠️  Перезапуск отменён"
+        ui_blank
+        ui_text "Код на диске не запускается, поэтому трогать процесс я не стал."
+        ui_text "Ошибка — выше. Вернуть файлы как в репозитории:"
+        ui_sub "cd $PROJECT_DIR && git checkout -- . && $SELF update"
     else
-        ui_text "Бот уже на свежей версии, обновлять и перезапускать нечего."
+        ui_head "✅  Всё на свежей версии"
+        ui_blank
+        if [ "$NEED_RESTART" -eq 1 ]; then
+            ui_text "Код был актуальный, но процесс работал на старом — перезапустил."
+        else
+            ui_text "Бот уже на свежей версии, обновлять и перезапускать нечего."
+        fi
     fi
     ui_blank
     ui_text "Управление"
@@ -227,6 +258,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
     ui_blank
     ui_rule
     ui_blank
+    [ "$RESTART_BLOCKED" -eq 1 ] && exit 1
     exit 0
 fi
 
@@ -293,6 +325,36 @@ chmod +x "$PROJECT_DIR"/*.sh "$PROJECT_DIR"/scripts/*.sh 2>/dev/null || true
 
 # Обновление могло принести новую версию обёртки — перезаписываем её свежей
 ensure_launcher >/dev/null 2>&1 || true
+
+# Пробуем импортировать новый код, пока старый бот ещё работает: если версия
+# битая, возвращаем файлы и живой процесс даже не заметит обновления
+if ! preflight; then
+    ui_fail "новая версия не собирается — к боту её не подпускаю"
+    show_preflight_error
+    if git reset --hard --quiet "$OLD_COMMIT" 2>/dev/null; then
+        "$PY" -m pip install --quiet -r "$PROJECT_DIR/requirements.txt" >/dev/null 2>&1 || true
+        ui_ok "код возвращён на ${OLD_COMMIT:0:7}, бот продолжает работать без перерыва"
+        [ "$STASHED" -eq 1 ] && git stash pop --quiet 2>/dev/null || true
+        notify_owner "⚠️ <b>Обновление не применилось</b>
+Версия <code>${NEW_COMMIT:0:7}</code> не импортируется, оставил <code>${OLD_COMMIT:0:7}</code>.
+Бот работал всё это время, перерыва не было."
+    else
+        ui_warn "вернуть код автоматически не получилось"
+        ui_note "сделайте вручную: git reset --hard ${OLD_COMMIT:0:7}"
+    fi
+    ui_blank
+    ui_rule
+    ui_blank
+    ui_head "⚠️  Обновление отменено"
+    ui_blank
+    ui_text "Бот работает на прежней версии ${OLD_COMMIT:0:7} — простоя не было."
+    ui_text "Ошибка в новой версии показана выше."
+    ui_blank
+    ui_rule
+    ui_blank
+    exit 1
+fi
+ui_ok "новая версия собирается, можно перезапускать"
 
 # ------------------------------------------------------------------ 5. перезапуск и проверка
 
