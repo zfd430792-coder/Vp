@@ -54,20 +54,79 @@
 - Настройки бота (лимиты, пороги модерации, капча) меняются из панели без перезапуска
 - Напоминание, если жалоба висит дольше установленного срока
 
-## Быстрый старт
+## Установка одной командой
 
 ```bash
-git clone <репозиторий> && cd Vp
-
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-
-cp .env.example .env               # укажите BOT_TOKEN и OWNER_IDS
-python bot.py
+git clone <репозиторий> && cd Vp && bash install.sh
 ```
 
-Токен берётся у [@BotFather](https://t.me/BotFather), свой Telegram ID — у [@userinfobot](https://t.me/userinfobot).
+Скрипт всё сделает сам:
+
+1. Найдёт подходящий Python и создаст окружение в `.venv`
+2. Установит зависимости
+3. Спросит **токен бота** и **ваш Telegram ID** — и проверит токен в Telegram,
+   сразу показав, какой бот подключился
+4. Сохранит `.env` с правами только для владельца файла
+5. Настроит автозапуск: службу systemd, а если systemd нет — собственный сторож
+   процесса плюс запуск после перезагрузки через cron
+6. Поднимет бота в фоне и убедится, что он действительно работает
+
+```
+[3/6] Настройка бота
+
+      Токен бота берётся у @BotFather: /newbot → название → @имя_бота
+      Токен бота: 1234567890:AA...
+      ✔ токен принят
+
+      Ваш Telegram ID узнаёт @userinfobot — он пришлёт число в ответ на /start
+      Ваш Telegram ID: 123456789
+      ✔ владелец: 123456789
+
+[4/6] Проверяю токен в Telegram
+      ✔ бот найден: @my_dating_bot (Знакомства)
+```
+
+Токен берётся у [@BotFather](https://t.me/BotFather), свой Telegram ID — у
+[@userinfobot](https://t.me/userinfobot). Повторный запуск `install.sh` безопасен:
+он предложит оставить прежние настройки.
+
+Если бот не удержался после старта, установщик не скажет «готово» — он покажет
+последние строки лога и подскажет, что проверить.
+
+### Управление
+
+```bash
+./manage.sh status     # работает или нет, статистика, последние строки лога
+./manage.sh logs       # живой лог (Ctrl+C — выйти)
+./manage.sh restart    # перезапуск
+./manage.sh stop       # остановить
+./manage.sh update     # git pull, зависимости, перезапуск
+```
+
+Скрипт сам понимает, как бот установлен, и работает одинаково и со службой
+systemd, и со сторожем процесса.
+
+### Как держится режим 24/7
+
+| Ситуация | Что происходит |
+|---|---|
+| Бот упал с ошибкой | Перезапуск через 5 секунд |
+| Сеть пропала надолго | Повтор с растущей паузой до 5 минут, без ограничения числа попыток |
+| Неверный токен или `.env` | Перезапуска нет: в логе причина и что исправить, иначе бот бился бы в цикле |
+| Сервер перезагрузился | systemd поднимает службу сам; без systemd — задание `@reboot` в cron |
+| Лог разросся | Сторож оставляет одну предыдущую копию `bot.log.1`, остальное отбрасывает |
+
+Бот сообщает супервизору код выхода: `0` — штатная остановка, `1` — сбой, который
+может пройти сам, `2` — ошибка настройки, которую перезапуск не вылечит.
+
+### Установка вручную
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env               # укажите BOT_TOKEN и OWNER_IDS
+.venv/bin/python bot.py
+```
 
 ### Переменные окружения
 
@@ -180,6 +239,9 @@ python bot.py
 ## Структура проекта
 
 ```
+install.sh              установка одной командой
+manage.sh               start / stop / restart / status / logs / update
+scripts/run_forever.sh  сторож процесса для систем без systemd
 bot.py                  запуск
 app/
   config.py             конфигурация и .env
@@ -209,31 +271,6 @@ python tests/test_bot.py    # сквозные сценарии через эм�
 Токен для тестов не нужен: `tests/harness.py` подменяет Bot API и прогоняет
 настоящие хендлеры, middleware и состояния. Те же три команды выполняет GitHub
 Actions на каждый пуш — файл `.github/workflows/ci.yml`.
-
-## Запуск на сервере
-
-```ini
-# /etc/systemd/system/dating-bot.service
-[Unit]
-Description=Dating bot
-After=network.target
-
-[Service]
-Type=simple
-User=bot
-WorkingDirectory=/opt/dating-bot
-ExecStart=/opt/dating-bot/.venv/bin/python bot.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo systemctl enable --now dating-bot
-journalctl -u dating-bot -f
-```
 
 ## Приватность
 

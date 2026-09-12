@@ -26,6 +26,15 @@ jobs:
       - name: Статический анализ
         run: ruff check .
 
+      - name: Проверка скриптов установки
+        run: |
+          bash -n install.sh
+          bash -n manage.sh
+          bash -n scripts/run_forever.sh
+          if command -v shellcheck >/dev/null; then
+            shellcheck -S error install.sh manage.sh scripts/run_forever.sh
+          fi
+
       - name: Проверки логики и SQL
         run: python tests/test_flow.py
 

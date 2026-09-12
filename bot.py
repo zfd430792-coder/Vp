@@ -23,6 +23,13 @@ from app.services.settings import Settings
 
 log = logging.getLogger("bot")
 
+# Коды выхода для супервизора (systemd, scripts/run_forever.sh):
+#   0 — штатная остановка, перезапускать не нужно
+#   1 — сбой, который может пройти сам (сеть, временная ошибка Telegram)
+#   2 — неправильная настройка: перезапуск не поможет, нужны руки
+EXIT_RETRY = 1
+EXIT_FATAL = 2
+
 COMMANDS = [
     BotCommand(command="start", description="Главное меню"),
     BotCommand(command="feed", description="Смотреть анкеты"),
@@ -51,7 +58,7 @@ async def main() -> None:
         config = load_config()
     except ConfigError as error:
         print(f"\n❌ {error}\n", file=sys.stderr)
-        raise SystemExit(1) from error
+        raise SystemExit(EXIT_FATAL) from error
 
     setup_logging(config.log_level)
 
@@ -96,14 +103,14 @@ async def main() -> None:
                 "или получите новый у @BotFather.\n",
                 file=sys.stderr,
             )
-            raise SystemExit(1) from error
+            raise SystemExit(EXIT_FATAL) from error
         except TelegramNetworkError as error:
             print(
                 f"\n❌ Не удалось связаться с Telegram: {error}\n"
                 "Проверьте интернет-соединение и попробуйте ещё раз.\n",
                 file=sys.stderr,
             )
-            raise SystemExit(1) from error
+            raise SystemExit(EXIT_RETRY) from error
 
         log.info("Запускаюсь как @%s (id=%s)", me.username, me.id)
         await bot.set_my_commands(COMMANDS)
@@ -118,5 +125,6 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    with suppress(KeyboardInterrupt, SystemExit):
+    # SystemExit специально не глушим: код выхода нужен супервизору
+    with suppress(KeyboardInterrupt):
         asyncio.run(main())

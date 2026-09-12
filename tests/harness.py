@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from aiogram import Bot, Dispatcher
@@ -85,7 +85,7 @@ class MockSession(BaseSession):
     def _message(self, chat_id: int, text: str | None) -> Message:
         return Message(
             message_id=next(self._ids),
-            date=datetime.now(UTC),
+            date=datetime.now(timezone.utc),
             chat=Chat(id=chat_id, type="private"),
             from_user=BOT_USER,
             text=text,
@@ -190,7 +190,7 @@ class Harness:
     ) -> MockSession:
         message = Message(
             message_id=next(self._message_id),
-            date=datetime.now(UTC),
+            date=datetime.now(timezone.utc),
             chat=Chat(id=user_id, type="private"),
             from_user=self._user(user_id),
             text=None if photo else text,
@@ -209,7 +209,7 @@ class Harness:
     async def click(self, user_id: int, data: str, *, message_text: str = "карточка") -> MockSession:
         message = Message(
             message_id=next(self._message_id),
-            date=datetime.now(UTC),
+            date=datetime.now(timezone.utc),
             chat=Chat(id=user_id, type="private"),
             from_user=BOT_USER,
             text=message_text,
