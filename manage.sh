@@ -9,34 +9,35 @@ set -uo pipefail
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$PROJECT_DIR"
 
+if [ ! -f "$PROJECT_DIR/scripts/ui.sh" ]; then
+    printf 'Не найден scripts/ui.sh — похоже, репозиторий скачан не полностью.\n' >&2
+    printf 'Скачайте проект заново: git clone <репозиторий>\n' >&2
+    exit 1
+fi
+# shellcheck source=scripts/ui.sh
+. "$PROJECT_DIR/scripts/ui.sh"
+
 PY="$PROJECT_DIR/.venv/bin/python"
 SERVICE_NAME="dating-bot"
 PID_FILE="$PROJECT_DIR/data/bot.pid"
+CHILD_PID_FILE="$PROJECT_DIR/data/bot.child.pid"
 LOG_FILE="$PROJECT_DIR/logs/bot.log"
 MODE_FILE="$PROJECT_DIR/data/runmode"
-
-if [ -t 1 ] && command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
-    B="$(tput bold)"; D="$(tput dim)"; R="$(tput sgr0)"
-    RED="$(tput setaf 1)"; GREEN="$(tput setaf 2)"; YELLOW="$(tput setaf 3)"; CYAN="$(tput setaf 6)"
-else
-    B=""; D=""; R=""; RED=""; GREEN=""; YELLOW=""; CYAN=""
-fi
 
 QUIET=0
 for arg in "$@"; do
     [ "$arg" = "--quiet" ] && QUIET=1
 done
 
-say()  { [ "$QUIET" -eq 1 ] || printf '%s\n' "$1"; }
-ok()   { [ "$QUIET" -eq 1 ] || printf '%s✔%s %s\n' "$GREEN" "$R" "$1"; }
-warn() { printf '%s!%s %s\n' "$YELLOW" "$R" "$1"; }
-fail() { printf '%s✘%s %s\n' "$RED" "$R" "$1"; }
+ok()   { [ "$QUIET" -eq 1 ] || printf '  %s✔%s %s\n' "$UI_GREEN" "$UI_R" "$1"; }
+warn() { printf '  %s!%s %s\n' "$UI_YELLOW" "$UI_R" "$1"; }
+fail() { printf '  %s✘%s %s\n' "$UI_RED" "$UI_R" "$1"; }
+say()  { [ "$QUIET" -eq 1 ] || printf '  %s\n' "$1"; }
 
 MODE="plain"
 [ -f "$MODE_FILE" ] && MODE="$(tr -d ' \r\n' < "$MODE_FILE")"
 
 sc() {
-    # обёртка над systemctl для нужного режима
     if [ "$MODE" = "systemd-user" ]; then
         systemctl --user "$@"
     elif [ "$(id -u)" -eq 0 ]; then
@@ -46,10 +47,7 @@ sc() {
     fi
 }
 
-CHILD_PID_FILE="$PROJECT_DIR/data/bot.child.pid"
-
 pid_alive() {
-    # pid_alive путь_к_pid_файлу
     [ -f "$1" ] || return 1
     local pid
     pid="$(cat "$1" 2>/dev/null || true)"
@@ -61,7 +59,7 @@ supervisor_alive() { pid_alive "$PID_FILE"; }
 child_alive()      { pid_alive "$CHILD_PID_FILE"; }
 
 is_running() {
-    # Живым считается только сам бот: сторож может ждать следующей попытки
+    # Живым считаем только сам бот: сторож может ждать следующей попытки
     case "$MODE" in
         systemd-user|systemd-system) sc is-active --quiet "$SERVICE_NAME" ;;
         *) child_alive ;;
@@ -70,13 +68,21 @@ is_running() {
 
 check_env() {
     if [ ! -x "$PY" ]; then
-        fail "Окружение не найдено. Запустите установку: bash install.sh"
+        fail "окружение не найдено — запустите установку: bash install.sh"
         exit 1
     fi
     if [ ! -f "$PROJECT_DIR/.env" ]; then
-        fail "Нет файла .env. Запустите установку: bash install.sh"
+        fail "нет файла .env — запустите установку: bash install.sh"
         exit 1
     fi
+}
+
+mode_title() {
+    case "$MODE" in
+        systemd-system) printf 'служба systemd, системная' ;;
+        systemd-user)   printf 'служба systemd, пользовательская' ;;
+        *)              printf 'собственный сторож процесса' ;;
+    esac
 }
 
 do_start() {
@@ -91,7 +97,7 @@ do_start() {
             ;;
         *)
             if supervisor_alive; then
-                ok "сторож уже работает, ждёт следующей попытки"
+                ok "сторож уже работает и ждёт следующей попытки"
                 return 0
             fi
             mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/data"
@@ -140,9 +146,12 @@ do_stop() {
 }
 
 db_summary() {
+    # Выравнивание считает Python: в bash printf padding идёт по байтам,
+    # а кириллица занимает два байта на символ — столбцы бы разъехались.
     [ -x "$PY" ] || return 0
-    DB_PATH_VALUE="$(sed -n 's/^DB_PATH=//p' "$PROJECT_DIR/.env" 2>/dev/null | head -n 1 | tr -d '"\r')"
-    DB_PATH="${DB_PATH_VALUE:-data/bot.db}" "$PY" - <<'PYCODE' 2>/dev/null || true
+    local db_value
+    db_value="$(sed -n 's/^DB_PATH=//p' "$PROJECT_DIR/.env" 2>/dev/null | head -n 1 | tr -d '"\r')"
+    DB_PATH="${db_value:-data/bot.db}" "$PY" - <<'PYCODE' 2>/dev/null || true
 import os
 import sqlite3
 from pathlib import Path
@@ -151,10 +160,12 @@ path = Path(os.environ.get("DB_PATH", "data/bot.db"))
 if not path.is_absolute():
     path = Path.cwd() / path
 if not path.exists():
+    print(f"{'База':<12}ещё не создана")
     raise SystemExit(0)
 
 connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
 try:
+
     def one(sql: str) -> int:
         try:
             return int(connection.execute(sql).fetchone()[0])
@@ -162,63 +173,91 @@ try:
             return 0
 
     users = one("SELECT COUNT(*) FROM users WHERE status != 'deleted'")
+    active = one(
+        "SELECT COUNT(*) FROM users"
+        " WHERE last_active_at > strftime('%s', 'now') - 86400"
+    )
     profiles = one("SELECT COUNT(*) FROM profiles WHERE is_complete = 1")
     matches = one("SELECT COUNT(*) FROM matches")
     reports = one("SELECT COUNT(*) FROM reports WHERE status = 'open'")
-    active = one(
-        "SELECT COUNT(*) FROM users WHERE last_active_at > strftime('%s','now') - 86400"
-    )
-    size = path.stat().st_size / 1024 / 1024
-    print(f"  Людей: {users}   анкет: {profiles}   активны за сутки: {active}")
-    print(f"  Симпатий: {matches}   открытых жалоб: {reports}")
-    print(f"  База: {size:.1f} МБ ({path})")
+    verified = one("SELECT COUNT(*) FROM users WHERE verified = 1")
+    size_mb = path.stat().st_size / 1024 / 1024
+
+    rows = [
+        ("Людей", str(users)),
+        ("Активны", f"{active} за сутки"),
+        ("Анкет", f"{profiles} заполнено, {verified} с галочкой"),
+        ("Симпатий", str(matches)),
+        ("Жалоб", f"{reports} открытых"),
+        ("База", f"{size_mb:.1f} МБ"),
+    ]
+    for label, value in rows:
+        print(f"{label:<12}{value}")
 finally:
     connection.close()
 PYCODE
 }
 
-do_status() {
-    printf '\n%s Бот знакомств %s\n\n' "$CYAN" "$R"
-    if is_running; then
-        printf '  Состояние: %s● работает%s\n' "$GREEN" "$R"
-    elif [ "$MODE" = "plain" ] && supervisor_alive; then
-        printf '  Состояние: %s● перезапускается%s %s(сторож ждёт следующей попытки)%s\n' \
-            "$YELLOW" "$R" "$D" "$R"
+trim_lines() {
+    # Обрезка по символам: cut -c и awk substr местами считают байты и рвут
+    # кириллицу. Программу передаём файлом, а не через stdin — там данные.
+    local width="${1:-66}"
+    if [ -x "$PY" ] && [ -f "$PROJECT_DIR/scripts/trim.py" ]; then
+        "$PY" "$PROJECT_DIR/scripts/trim.py" "$width"
     else
-        printf '  Состояние: %s● остановлен%s\n' "$RED" "$R"
+        cat
     fi
+}
 
-    case "$MODE" in
-        systemd-system) printf '  Режим: служба systemd (системная)\n' ;;
-        systemd-user)   printf '  Режим: служба systemd (пользовательская)\n' ;;
-        *)              printf '  Режим: собственный сторож процесса\n' ;;
-    esac
+do_status() {
+    ui_blank
+    ui_rule
+    ui_blank
+    ui_head "💛  Бот знакомств"
+    ui_blank
 
-    if [ "$MODE" = "plain" ] && [ -f "$PID_FILE" ]; then
-        printf '  PID сторожа: %s\n' "$(cat "$PID_FILE" 2>/dev/null)"
+    if is_running; then
+        printf '     Состояние   %s● работает%s\n' "$UI_GREEN" "$UI_R"
+    elif [ "$MODE" = "plain" ] && supervisor_alive; then
+        printf '     Состояние   %s● перезапускается%s\n' "$UI_YELLOW" "$UI_R"
+        ui_sub "сторож ждёт следующей попытки, причина в логе"
+    else
+        printf '     Состояние   %s● остановлен%s\n' "$UI_RED" "$UI_R"
     fi
-    if [ "${MODE#systemd}" != "$MODE" ]; then
-        since="$(sc show "$SERVICE_NAME" --property=ActiveEnterTimestamp --value 2>/dev/null || true)"
-        [ -n "$since" ] && printf '  Запущен: %s\n' "$since"
-    fi
+    printf '     Режим       %s\n' "$(mode_title)"
 
-    printf '\n'
-    db_summary
-    printf '\n'
-    printf '  %sПоследние строки лога%s\n' "$B" "$R"
     case "$MODE" in
         systemd-user|systemd-system)
-            sc --no-pager -n 8 status "$SERVICE_NAME" 2>/dev/null | tail -n 8 | sed 's/^/    /' || true
+            since="$(sc show "$SERVICE_NAME" --property=ActiveEnterTimestamp --value 2>/dev/null || true)"
+            [ -n "$since" ] && printf '     Запущен     %s\n' "$since"
             ;;
         *)
-            if [ -f "$LOG_FILE" ]; then
-                tail -n 8 "$LOG_FILE" | sed 's/^/    /'
-            else
-                printf '    %sлога пока нет%s\n' "$D" "$R"
+            if supervisor_alive; then
+                printf '     Сторож      PID %s\n' "$(cat "$PID_FILE" 2>/dev/null)"
             fi
             ;;
     esac
-    printf '\n'
+
+    ui_blank
+    db_summary | sed 's/^/     /'
+    ui_blank
+    ui_text "Последние строки лога"
+    case "$MODE" in
+        systemd-user|systemd-system)
+            sc --no-pager -n 8 status "$SERVICE_NAME" 2>/dev/null |
+                tail -n 6 | trim_lines 66 | sed 's/^/       /' || true
+            ;;
+        *)
+            if [ -f "$LOG_FILE" ]; then
+                tail -n 8 "$LOG_FILE" | trim_lines 66 | tail -n 6 | sed 's/^/       /'
+            else
+                ui_sub "лога пока нет"
+            fi
+            ;;
+    esac
+    ui_blank
+    ui_rule
+    ui_blank
 }
 
 do_logs() {
@@ -235,7 +274,7 @@ do_logs() {
             if [ -f "$LOG_FILE" ]; then
                 tail -n 50 -f "$LOG_FILE"
             else
-                warn "Лога пока нет: $LOG_FILE"
+                warn "лога пока нет: $LOG_FILE"
             fi
             ;;
     esac
@@ -244,12 +283,25 @@ do_logs() {
 do_update() {
     check_env
     if command -v git >/dev/null 2>&1 && [ -d "$PROJECT_DIR/.git" ]; then
-        say "Забираю обновления…"
+        say "забираю обновления…"
         git -C "$PROJECT_DIR" pull --ff-only || warn "git pull не удался, обновляю только зависимости"
     fi
     "$PY" -m pip install --quiet -r "$PROJECT_DIR/requirements.txt" && ok "зависимости обновлены"
     do_stop
     do_start
+}
+
+usage() {
+    ui_blank
+    ui_head "Управление ботом"
+    ui_blank
+    ui_cmd "./manage.sh start" "запустить"
+    ui_cmd "./manage.sh stop" "остановить"
+    ui_cmd "./manage.sh restart" "перезапустить"
+    ui_cmd "./manage.sh status" "состояние и статистика"
+    ui_cmd "./manage.sh logs" "живой лог, Ctrl+C — выйти"
+    ui_cmd "./manage.sh update" "обновить код и перезапустить"
+    ui_blank
 }
 
 case "${1:-status}" in
@@ -260,14 +312,6 @@ case "${1:-status}" in
     logs)       do_logs ;;
     update)     do_update ;;
     is-running) is_running ;;
-    *)
-        printf '\nИспользование: ./manage.sh %s\n\n' "{start|stop|restart|status|logs|update}"
-        printf '  start     запустить бота\n'
-        printf '  stop      остановить\n'
-        printf '  restart   перезапустить\n'
-        printf '  status    состояние и статистика\n'
-        printf '  logs      живой лог (Ctrl+C — выйти)\n'
-        printf '  update    обновить код и зависимости, перезапустить\n\n'
-        exit 1
-        ;;
+    help|-h|--help) usage ;;
+    *)          usage; exit 1 ;;
 esac
