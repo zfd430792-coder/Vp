@@ -95,6 +95,25 @@ step "Проверяю, что всё на месте"
 [ -f "$ENV_FILE" ] || die "Нет файла .env" "Сначала установка: bash install.sh"
 ui_ok ".env на месте, вводить ничего не придётся"
 
+# Команду управления делаем сразу, а не после обновления: иначе при «обновлять
+# нечего» скрипт выходил раньше, и команда так и не появлялась.
+ensure_launcher() {
+    [ -f "$PROJECT_DIR/scripts/launcher.sh" ] || return 1
+    # shellcheck source=scripts/launcher.sh
+    . "$PROJECT_DIR/scripts/launcher.sh"
+    install_launcher "$PROJECT_DIR" quiet || return 1
+    SELF="$LAUNCHER_NAME"
+    return 0
+}
+
+if ensure_launcher; then
+    ui_ok "команда «$LAUNCHER_NAME» на месте: $LAUNCHER_PATH"
+    if [ "$LAUNCHER_ON_PATH" -eq 0 ]; then
+        ui_note "заработает в новом терминале, либо: export PATH=\"$LAUNCHER_DIR:\$PATH\""
+    fi
+fi
+
+
 if ! command -v git >/dev/null 2>&1 || [ ! -d "$PROJECT_DIR/.git" ]; then
     die "Обновление через git недоступно" \
         "Проект скачан без истории git, автоматически обновить нечем." \
@@ -139,6 +158,16 @@ if [ "$OLD_COMMIT" = "$REMOTE_COMMIT" ]; then
     ui_head "✅  Обновлять нечего"
     ui_blank
     ui_text "Бот уже на свежей версии, перезапуск не нужен."
+    ui_blank
+    ui_text "Управление"
+    ui_cmd "$SELF" "состояние и версия"
+    ui_cmd "$SELF version" "что менялось последним"
+    ui_cmd "$SELF logs" "живой лог"
+    if [ "${LAUNCHER_ON_PATH:-1}" -eq 0 ]; then
+        ui_blank
+        ui_text "Команда заработает в новом терминале. Прямо сейчас:"
+        ui_sub "export PATH=\"$LAUNCHER_DIR:\$PATH\""
+    fi
     ui_blank
     ui_rule
     ui_blank
@@ -225,19 +254,8 @@ fi
 
 chmod +x "$PROJECT_DIR"/*.sh "$PROJECT_DIR"/scripts/*.sh 2>/dev/null || true
 
-# Обновление могло принести новую версию команды управления — обновляем обёртку.
-# Так человек, поставивший бота раньше, получает команду «bot» без переустановки.
-if [ -f "$PROJECT_DIR/scripts/launcher.sh" ]; then
-    # shellcheck source=scripts/launcher.sh
-    . "$PROJECT_DIR/scripts/launcher.sh"
-    if install_launcher "$PROJECT_DIR" quiet; then
-        ui_ok "команда «$LAUNCHER_NAME» на месте: $LAUNCHER_PATH"
-        if [ "$LAUNCHER_ON_PATH" -eq 0 ]; then
-            ui_note "заработает в новом терминале, либо: export PATH=\"$LAUNCHER_DIR:\$PATH\""
-        fi
-        SELF="$LAUNCHER_NAME"
-    fi
-fi
+# Обновление могло принести новую версию обёртки — перезаписываем её свежей
+ensure_launcher >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------ 5. перезапуск и проверка
 
