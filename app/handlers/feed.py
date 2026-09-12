@@ -40,7 +40,7 @@ async def open_feed(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    await ui.leave_chat_mode(state, int(user["id"]))
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     profile = await ui.require_profile(bot, db, message.chat.id, user)
     if not profile:
         return
@@ -88,7 +88,7 @@ async def feed_action(
     user_id = int(user["id"])
     target_id = int(callback_data.target)
 
-    await ui.leave_chat_mode(state, user_id)
+    await ui.leave_chat_mode(db, state, user_id)
     profile = await profiles_service.get(db, user_id)
     if not profile or not profile.get("is_complete"):
         await query.answer(texts.NOT_REGISTERED, show_alert=True)

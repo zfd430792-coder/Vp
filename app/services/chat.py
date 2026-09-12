@@ -10,33 +10,34 @@ from typing import Any
 from app.db import Database
 from app.utils.time import now
 
-# user_id -> match_id: у кого сейчас открыт диалог (только в памяти процесса)
-_active: dict[int, int] = {}
-# (from_id, match_id) -> время последнего показанного заголовка
+# (получатель, match_id) -> когда последний раз показывали подпись «сообщение от ...».
+# Это косметика, поэтому держать её в памяти процесса достаточно.
 _headers: dict[tuple[int, int], int] = {}
 
 HEADER_COOLDOWN = 300
 
 
-def open_chat(user_id: int, match_id: int) -> None:
-    _active[user_id] = match_id
+async def open_chat(db: Database, user_id: int, match_id: int) -> None:
+    """Запоминает открытый диалог в базе, чтобы он пережил перезапуск бота."""
+    await db.execute("UPDATE users SET active_match_id = ? WHERE id = ?", (match_id, user_id))
 
 
-def close_chat(user_id: int) -> None:
-    _active.pop(user_id, None)
+async def close_chat(db: Database, user_id: int) -> None:
+    await db.execute("UPDATE users SET active_match_id = NULL WHERE id = ?", (user_id,))
 
 
-def current_chat(user_id: int) -> int | None:
-    return _active.get(user_id)
+async def current_chat(db: Database, user_id: int) -> int | None:
+    value = await db.fetchval("SELECT active_match_id FROM users WHERE id = ?", (user_id,))
+    return int(value) if value else None
 
 
-def is_viewing(user_id: int, match_id: int) -> bool:
-    return _active.get(user_id) == match_id
+async def is_viewing(db: Database, user_id: int, match_id: int) -> bool:
+    return await current_chat(db, user_id) == match_id
 
 
-def need_header(to_id: int, match_id: int) -> bool:
+async def need_header(db: Database, to_id: int, match_id: int) -> bool:
     """Показывать ли подпись «сообщение от ...» перед пересылкой."""
-    if is_viewing(to_id, match_id):
+    if await is_viewing(db, to_id, match_id):
         return False
     key = (to_id, match_id)
     moment = now()

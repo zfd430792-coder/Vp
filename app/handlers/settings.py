@@ -26,8 +26,10 @@ router = Router(name="settings")
 
 @router.message(StateFilter(None), F.text == texts.BTN_SETTINGS)
 @router.message(Command("settings"))
-async def open_settings(message: Message, state: FSMContext, user: dict[str, Any]) -> None:
-    await ui.leave_chat_mode(state, int(user["id"]))
+async def open_settings(
+    message: Message, state: FSMContext, db: Database, user: dict[str, Any]
+) -> None:
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     await message.answer(
         "⚙️ <b>Настройки</b>\n\nЗдесь можно настроить поиск, уведомления и приватность.",
         reply_markup=inline.settings_menu(),

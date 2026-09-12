@@ -23,13 +23,12 @@ from app.utils.time import fmt_dt, now
 UI_MESSAGES_KEY = "ui_msgs"
 
 
-async def leave_chat_mode(state: FSMContext, user_id: int) -> None:
+async def leave_chat_mode(db: Database, state: FSMContext, user_id: int) -> None:
     """Выход в обычный режим: закрывает открытый диалог и сбрасывает состояние."""
     from app.services import chat as chat_service
 
-    chat_service.close_chat(user_id)
+    await chat_service.close_chat(db, user_id)
     await state.set_state(None)
-    await state.update_data(chat_match=0, chat_partner=0)
 
 
 async def clear_ui(bot: Bot, state: FSMContext, chat_id: int) -> None:

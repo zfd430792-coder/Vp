@@ -42,10 +42,6 @@ class Report(StatesGroup):
     comment = State()
 
 
-class Chat(StatesGroup):
-    chatting = State()
-
-
 class Appeal(StatesGroup):
     text = State()
 

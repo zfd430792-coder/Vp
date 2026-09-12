@@ -99,7 +99,7 @@ async def cmd_start(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    await ui.leave_chat_mode(state, int(user["id"]))
+    await ui.leave_chat_mode(db, state, int(user["id"]))
 
     payload = (command.args or "").strip() if command else ""
     if payload and not user.get("source"):
@@ -279,7 +279,7 @@ async def cmd_safety(message: Message) -> None:
 async def cmd_menu(
     message: Message, bot: Bot, db: Database, user: dict[str, Any], state: FSMContext
 ) -> None:
-    await ui.leave_chat_mode(state, int(user["id"]))
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     await ui.show_menu(bot, db, message.chat.id, user)
 
 
@@ -289,7 +289,7 @@ async def cmd_cancel(
     message: Message, bot: Bot, state: FSMContext, db: Database, user: dict[str, Any]
 ) -> None:
     current = await state.get_state()
-    await ui.leave_chat_mode(state, int(user["id"]))
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     if current is None:
         await ui.show_menu(bot, db, message.chat.id, user)
         return

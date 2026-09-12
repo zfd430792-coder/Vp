@@ -237,6 +237,10 @@ MIGRATIONS: list[list[str]] = [
         "ALTER TABLE banned_content ADD COLUMN added_for INTEGER",
         "CREATE INDEX IF NOT EXISTS idx_banned_for ON banned_content(added_for, kind)",
     ],
+    # --- версия 4: открытый диалог переживает перезапуск бота ----------------------
+    [
+        "ALTER TABLE users ADD COLUMN active_match_id INTEGER",
+    ],
 ]
 
 

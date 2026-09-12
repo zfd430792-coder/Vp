@@ -75,7 +75,7 @@ async def open_likes(
     db: Database,
     user: dict[str, Any],
 ) -> None:
-    await ui.leave_chat_mode(state, int(user["id"]))
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     profile = await ui.require_profile(bot, db, message.chat.id, user)
     if not profile:
         return
@@ -118,7 +118,7 @@ async def answer_like(
         await query.answer()
         return
 
-    await ui.leave_chat_mode(state, user_id)
+    await ui.leave_chat_mode(db, state, user_id)
 
     action = ACT_LIKE if callback_data.action == "like" else ACT_PASS
     result = await likes_service.act(db, user_id, target_id, action, source="inbox")

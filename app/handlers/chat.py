@@ -1,4 +1,8 @@
-"""Пересылка сообщений между собеседниками и общий перехватчик."""
+"""Пересылка сообщений между собеседниками и общий перехватчик.
+
+Открытый диалог хранится в базе (users.active_match_id), а не в памяти процесса:
+после перезапуска бота человек продолжает писать там же, где остановился.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -17,7 +21,6 @@ from app.services import chat as chat_service
 from app.services import likes as likes_service
 from app.services import profiles as profiles_service
 from app.services import users as users_service
-from app.states import Chat
 from app.utils.text import analyze_text, esc
 from app.utils.time import now
 
@@ -61,56 +64,65 @@ def describe(message: Message) -> tuple[str | None, str | None, str | None]:
     return None, texts.CHAT_UNSUPPORTED, None
 
 
-@router.message(Chat.chatting, F.text == texts.BTN_CHAT_EXIT)
+@router.message(StateFilter(None), F.text == texts.BTN_CHAT_EXIT)
 async def exit_chat(
     message: Message, bot: Bot, state: FSMContext, db: Database, user: dict[str, Any]
 ) -> None:
-    chat_service.close_chat(int(user["id"]))
-    await state.set_state(None)
-    await state.update_data(chat_match=0, chat_partner=0)
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     await ui.show_menu(bot, db, message.chat.id, user, texts.CHAT_CLOSED)
 
 
-@router.message(Chat.chatting)
-async def relay(
+@router.message(StateFilter(None))
+async def route_message(
     message: Message,
     bot: Bot,
     state: FSMContext,
     db: Database,
     user: dict[str, Any],
 ) -> None:
+    """Либо пересылает сообщение собеседнику, либо подсказывает, что делать."""
     user_id = int(user["id"])
-    data = await state.get_data()
-    match_id = int(data.get("chat_match") or 0)
-    partner_id = int(data.get("chat_partner") or 0)
-
-    if not match_id or not partner_id:
-        chat_service.close_chat(user_id)
-        await state.set_state(None)
-        await ui.show_menu(bot, db, message.chat.id, user, texts.CHAT_CLOSED)
+    match_id = int(user.get("active_match_id") or 0)
+    if match_id:
+        await _relay(message, bot, state, db, user, match_id)
         return
+
+    profile = await profiles_service.get(db, user_id)
+    if not profile or not profile.get("is_complete"):
+        await message.answer(texts.NOT_REGISTERED)
+        return
+    await ui.show_menu(bot, db, message.chat.id, user, texts.UNKNOWN_INPUT)
+
+
+async def _relay(
+    message: Message,
+    bot: Bot,
+    state: FSMContext,
+    db: Database,
+    user: dict[str, Any],
+    match_id: int,
+) -> None:
+    user_id = int(user["id"])
 
     match = await likes_service.match_by_id(db, match_id)
     if not match or not match.get("active") or user_id not in (
         int(match["user_a"]),
         int(match["user_b"]),
     ):
-        chat_service.close_chat(user_id)
-        await state.set_state(None)
+        await ui.leave_chat_mode(db, state, user_id)
         await ui.show_menu(bot, db, message.chat.id, user, texts.CHAT_PARTNER_GONE)
         return
 
+    partner_id = likes_service.partner_id(match, user_id)
     partner = await users_service.get(db, partner_id)
     partner_profile = await profiles_service.get(db, partner_id)
     if not partner or not partner_profile or users_service.is_banned(partner):
-        chat_service.close_chat(user_id)
-        await state.set_state(None)
+        await ui.leave_chat_mode(db, state, user_id)
         await ui.show_menu(bot, db, message.chat.id, user, texts.CHAT_PARTNER_GONE)
         return
 
     if await likes_service.is_blocked(db, user_id, partner_id):
-        chat_service.close_chat(user_id)
-        await state.set_state(None)
+        await ui.leave_chat_mode(db, state, user_id)
         await ui.show_menu(bot, db, message.chat.id, user, texts.CHAT_PARTNER_GONE)
         return
 
@@ -123,7 +135,7 @@ async def relay(
     my_name = str((my_profile or {}).get("name") or "Собеседник")
     silent = not partner.get("notify_messages")
 
-    if chat_service.need_header(partner_id, match_id):
+    if await chat_service.need_header(db, partner_id, match_id):
         await notify.send_message(
             bot,
             db,
@@ -187,22 +199,3 @@ async def _maybe_warn_scam(
         "Никогда не переводи деньги и не отправляй коды из SMS. Если это развод — жми «🚩».",
         reply_markup=inline.chat_actions(match_id, from_id),
     )
-
-
-# --------------------------------------------------------------------------- перехватчик
-
-
-@router.message(StateFilter(None), F.text)
-async def unknown_text(
-    message: Message, bot: Bot, db: Database, user: dict[str, Any]
-) -> None:
-    profile = await profiles_service.get(db, int(user["id"]))
-    if not profile or not profile.get("is_complete"):
-        await message.answer(texts.NOT_REGISTERED)
-        return
-    await ui.show_menu(bot, db, message.chat.id, user, texts.UNKNOWN_INPUT)
-
-
-@router.message(StateFilter(None))
-async def unknown_other(message: Message, bot: Bot, db: Database, user: dict[str, Any]) -> None:
-    await ui.show_menu(bot, db, message.chat.id, user, texts.UNKNOWN_INPUT)

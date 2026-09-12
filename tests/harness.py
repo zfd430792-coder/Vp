@@ -226,5 +226,16 @@ class Harness:
         )
         return self.session
 
+    def restart(self) -> None:
+        """Имитирует перезапуск бота: вся память процесса теряется, база остаётся.
+
+        Роутеры aiogram — объекты уровня модуля и подключаются только к одному
+        диспетчеру, поэтому вместо второго Harness обнуляем то, что живёт в памяти.
+        """
+        from app.services import chat as chat_service
+
+        self.dp.fsm.storage = MemoryStorage()
+        chat_service._headers.clear()
+
     async def close(self) -> None:
         await self.bot.session.close()

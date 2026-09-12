@@ -102,7 +102,7 @@ async def open_profile(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    await ui.leave_chat_mode(state, int(user["id"]))
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     await show_profile(bot, db, settings, state, message.chat.id, user)
 
 

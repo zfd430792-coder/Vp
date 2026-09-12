@@ -210,9 +210,31 @@ async def main() -> None:
     check("получателю показано предупреждение", has(session, "Осторожно", BORIS))
     check("названа причина подозрения", has(session, "ссылка", BORIS))
 
+    print("\n▶ Диалог переживает перезапуск бота")
+    saved = await db.fetchval("SELECT active_match_id FROM users WHERE id = ?", (ALICE,))
+    check("открытый диалог хранится в базе", int(saved or 0) == match_id, str(saved))
+
+    harness.restart()  # память процесса потеряна, осталась только база
+    session.clear()
+    await harness.send(ALICE, "Я всё ещё в диалоге?")
+    check("после перезапуска сообщение дошло", "CopyMessage" in session.methods())
+    check(
+        "человека не выбросило в меню",
+        not any("Выбери действие" in text for text in session.texts(ALICE)),
+    )
+    check("собеседник снова получил подпись", has(session, "Новое сообщение от", BORIS))
+
     session.clear()
     await harness.send(ALICE, "⬅️ Выйти из диалога")
     check("выход из диалога работает", has(session, "Диалог закрыт", ALICE))
+    check(
+        "после выхода диалог закрыт и в базе",
+        await db.fetchval("SELECT active_match_id FROM users WHERE id = ?", (ALICE,)) is None,
+    )
+
+    session.clear()
+    await harness.send(ALICE, "просто текст после выхода")
+    check("сообщения больше не пересылаются", "CopyMessage" not in session.methods())
 
     print("\n▶ Жалоба")
     session.clear()

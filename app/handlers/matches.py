@@ -18,7 +18,6 @@ from app.services import likes as likes_service
 from app.services import notify
 from app.services import profiles as profiles_service
 from app.services import users as users_service
-from app.states import Chat
 from app.utils.keyboard_utils import page_bounds
 
 router = Router(name="matches")
@@ -66,7 +65,7 @@ async def show_matches(
 async def open_matches(
     message: Message, bot: Bot, state: FSMContext, db: Database, user: dict[str, Any]
 ) -> None:
-    await ui.leave_chat_mode(state, int(user["id"]))
+    await ui.leave_chat_mode(db, state, int(user["id"]))
     profile = await ui.require_profile(bot, db, message.chat.id, user)
     if not profile:
         return
@@ -127,11 +126,10 @@ async def open_chat(
 
     await query.answer()
     match_id = int(match["id"])
-    chat_service.open_chat(user_id, match_id)
+    await chat_service.open_chat(db, user_id, match_id)
     chat_service.reset_header(user_id, match_id)
     await chat_service.mark_read(db, match_id, user_id)
-    await state.set_state(Chat.chatting)
-    await state.update_data(chat_match=match_id, chat_partner=partner_id)
+    await state.set_state(None)
 
     history = await chat_service.history(db, match_id, limit=6)
     await notify.send_message(
@@ -186,8 +184,7 @@ async def block_partner(
 
     partner_id = likes_service.partner_id(match, user_id)
     await likes_service.block_user(db, user_id, partner_id)
-    chat_service.close_chat(user_id)
-    await state.set_state(None)
+    await ui.leave_chat_mode(db, state, user_id)
     await query.answer("Пользователь заблокирован")
     await notify.send_message(
         bot,

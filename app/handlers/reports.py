@@ -335,13 +335,10 @@ async def block_after_report(
     db: Database,
     user: dict[str, Any],
 ) -> None:
-    from app.services import chat as chat_service
-
     user_id = int(user["id"])
     target_id = int(callback_data.target)
     await likes_service.block_user(db, user_id, target_id)
-    chat_service.close_chat(user_id)
-    await state.set_state(None)
+    await ui.leave_chat_mode(db, state, user_id)
     await query.answer("Заблокировано")
     if query.message:
         await query.message.edit_reply_markup(reply_markup=None)

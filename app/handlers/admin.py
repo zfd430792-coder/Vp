@@ -207,7 +207,7 @@ async def admin_menu(
     settings: Settings,
     user: dict[str, Any],
 ) -> None:
-    chat_service.close_chat(int(user["id"]))
+    await chat_service.close_chat(db, int(user["id"]))
     await state.set_state(None)
     text, markup = await _menu_text(db, settings)
     await message.answer(text, reply_markup=markup)
