@@ -5,7 +5,7 @@ from aiogram.filters.callback_data import CallbackData
 
 
 class RegCB(CallbackData, prefix="reg"):
-    action: str            # rules_ok | rules_no | safety | start | gender | seeking | interest | done | skip
+    action: str            # begin | rules_ok | safety | gender | seeking | interest | done | skip
     value: str = ""
 
 

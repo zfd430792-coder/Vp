@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +82,47 @@ def app_modules() -> list[str]:
     return names
 
 
+# Telegram принимает только этот набор тегов. Любой другой (или незакрытый)
+# ломает отправку целиком: бот получит «can't parse entities» и промолчит.
+ALLOWED_TAGS = {
+    "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+    "a", "code", "pre", "span", "tg-spoiler", "tg-emoji", "blockquote",
+}
+TAG_RE = re.compile(r"<\s*(/?)\s*([a-zA-Z0-9-]+)([^>]*)>")
+
+
+def html_problem(value: str) -> str:
+    """Возвращает описание проблемы с разметкой или пустую строку."""
+    stack: list[str] = []
+    for closing, tag, _attrs in TAG_RE.findall(value):
+        name = tag.lower()
+        if name not in ALLOWED_TAGS:
+            return f"тег <{name}> Telegram не поддерживает"
+        if closing:
+            if not stack:
+                return f"</{name}> без открывающего тега"
+            if stack[-1] != name:
+                return f"</{name}> закрывает <{stack[-1]}>"
+            stack.pop()
+        else:
+            stack.append(name)
+    if stack:
+        return f"не закрыт тег <{stack[-1]}>"
+    return ""
+
+
+def text_constants() -> list[tuple[str, str]]:
+    module = importlib.import_module("app.texts")
+    found: list[tuple[str, str]] = []
+    for name in dir(module):
+        if name.startswith("_") or not name.isupper():
+            continue
+        value = getattr(module, name)
+        if isinstance(value, str):
+            found.append((name, value))
+    return sorted(found)
+
+
 def main() -> int:
     print("\n▶ Все файлы кода лежат в git")
     tracked = tracked_files()
@@ -102,6 +144,15 @@ def main() -> int:
             check(name, False, f"{type(error).__name__}: {error}")
         else:
             check(name, True)
+
+    print("\n▶ Разметка текстов понятна Telegram")
+    broken = [(name, html_problem(value)) for name, value in text_constants()]
+    broken = [(name, problem) for name, problem in broken if problem]
+    check(
+        "во всех текстах теги закрыты и поддерживаются",
+        not broken,
+        "; ".join(f"{name}: {problem}" for name, problem in broken),
+    )
 
     print("\n▶ Точка входа импортируется")
     try:

@@ -177,17 +177,28 @@ async def cmd_start(
         )
         return
 
-    # Анкеты нет — приветствие, затем предупреждение с кнопкой по таймеру.
-    # Предупреждение показываем всегда, а не только новичкам: принятые когда-то
-    # правила при незаконченной анкете не значат, что человек их прочитал,
-    # а памятку про мошенников и шантаж лишний раз увидеть только полезно.
-    await message.answer(texts.WELCOME, reply_markup=reply.remove)
+    # Анкеты нет — здороваемся и даём кнопку. Памятку про мошенников показываем
+    # не сразу: человек сначала решает, что хочет анкету, и только потом читает
+    # предупреждение — так его читают, а не пролистывают вместе с приветствием.
+    greeting = texts.WELCOME.format(name=_greeting_name(user))
 
     if not settings.get_bool("registration_open", True):
+        await message.answer(greeting)
         await message.answer(texts.REG_CLOSED)
         return
 
-    await show_warning(bot, db, settings, message.chat.id, state)
+    # Анкету уже начинали — зовём продолжить, а не начинать заново
+    started = bool(profile)
+    await message.answer(greeting, reply_markup=inline.start_profile(resume=started))
+
+
+def _greeting_name(user: dict[str, Any]) -> str:
+    """@юзернейм, если он есть, иначе имя из Telegram."""
+    username = (user.get("username") or "").strip()
+    if username:
+        return "@" + esc(username)
+    name = (user.get("tg_name") or "").strip()
+    return esc(name) if name else "друг"
 
 
 async def _remember_source(db: Database, user: dict[str, Any], payload: str) -> None:
@@ -211,6 +222,43 @@ async def _remember_source(db: Database, user: dict[str, Any], payload: str) -> 
 # --------------------------------------------------------------------------- правила
 
 
+@router.callback_query(RegCB.filter(F.action == "begin"))
+async def begin_from_welcome(
+    query: CallbackQuery,
+    state: FSMContext,
+    bot: Bot,
+    db: Database,
+    settings: Settings,
+    user: dict[str, Any],
+) -> None:
+    """Кнопка «Создать анкету» под приветствием."""
+    await query.answer()
+    if query.message is None:
+        return
+
+    if not settings.get_bool("registration_open", True):
+        await query.message.answer(texts.REG_CLOSED)
+        return
+
+    # Кнопка остаётся в переписке: могли нажать её и после того, как анкета
+    # уже готова. Тогда предупреждение ни к чему — просто открываем меню.
+    profile = await profiles_service.get(db, int(user["id"]))
+    if profile and profile.get("is_complete"):
+        await ui.show_menu(bot, db, query.message.chat.id, user)
+        return
+
+    # Убираем кнопку у приветствия, чтобы её не нажали второй раз
+    await notify.safe_call(
+        db,
+        query.message.chat.id,
+        bot.edit_message_reply_markup,
+        chat_id=query.message.chat.id,
+        message_id=query.message.message_id,
+        reply_markup=None,
+    )
+    await show_warning(bot, db, settings, query.message.chat.id, state)
+
+
 @router.callback_query(RegCB.filter(F.action == "safety"))
 async def show_safety_from_warning(query: CallbackQuery) -> None:
     if query.message:
@@ -228,11 +276,10 @@ async def back_to_warning(query: CallbackQuery) -> None:
 
 
 @router.callback_query(RegCB.filter(F.action == "rules_no"))
-async def decline_rules(query: CallbackQuery, state: FSMContext) -> None:
-    await state.clear()
-    if query.message:
-        await query.message.edit_text(texts.RULES_DECLINED)
-    await query.answer()
+async def decline_rules(query: CallbackQuery) -> None:
+    # Кнопки «Не согласен» больше нет, но она могла остаться в старых сообщениях.
+    # Отвечаем, чтобы у человека не крутился вечный индикатор нажатия.
+    await query.answer("Кнопка устарела — отправь /start", show_alert=True)
 
 
 @router.callback_query(RegCB.filter(F.action == "rules_ok"))

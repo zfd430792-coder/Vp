@@ -141,6 +141,22 @@ class MockSession(BaseSession):
             )
         return found
 
+    def button_labels(self, chat_id: int | None = None) -> list[str]:
+        """Подписи всех inline-кнопок с момента clear()."""
+        found: list[str] = []
+        for _name, payload in self.calls:
+            if chat_id is not None and payload.get("chat_id") != chat_id:
+                continue
+            markup = payload.get("reply_markup")
+            if not markup or "inline_keyboard" not in markup:
+                continue
+            found.extend(
+                button.get("text", "")
+                for row in markup["inline_keyboard"]
+                for button in row
+            )
+        return found
+
     def alerts(self) -> list[str]:
         """Тексты всплывающих ответов на нажатия кнопок."""
         return [

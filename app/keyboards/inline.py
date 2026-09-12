@@ -32,29 +32,27 @@ from app.utils.text import shorten
 # --------------------------------------------------------------------------- регистрация
 
 
-def rules() -> InlineKeyboardMarkup:
+def start_profile(*, resume: bool = False) -> InlineKeyboardMarkup:
+    """Кнопка под приветствием. Предупреждение показываем только после нажатия."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="🛡 Памятка по безопасности", callback_data=RegCB(action="safety"))
-    builder.button(text="✅ Принимаю правила", callback_data=RegCB(action="rules_ok"))
-    builder.button(text="❌ Не согласен", callback_data=RegCB(action="rules_no"))
-    builder.adjust(1)
+    label = "📝 Продолжить анкету" if resume else "📝 Создать анкету"
+    builder.button(text=label, callback_data=RegCB(action="begin"))
     return builder.as_markup()
 
 
 def warning_accept() -> InlineKeyboardMarkup:
     """Кнопки под предупреждением. Показываются не сразу — после паузы на чтение."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Принимаю правила", callback_data=RegCB(action="rules_ok"))
+    builder.button(text="✅ Мне есть 18, продолжаем", callback_data=RegCB(action="rules_ok"))
     builder.button(text="🛡 Подробнее о безопасности", callback_data=RegCB(action="safety"))
-    builder.button(text="❌ Не согласен", callback_data=RegCB(action="rules_no"))
     builder.adjust(1)
     return builder.as_markup()
 
 
 def after_safety() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Принимаю правила", callback_data=RegCB(action="rules_ok"))
-    builder.button(text="⬅️ Назад к предупреждению", callback_data=RegCB(action="rules_back"))
+    builder.button(text="✅ Мне есть 18, продолжаем", callback_data=RegCB(action="rules_ok"))
+    builder.button(text="⬅️ Назад", callback_data=RegCB(action="rules_back"))
     builder.adjust(1)
     return builder.as_markup()
 

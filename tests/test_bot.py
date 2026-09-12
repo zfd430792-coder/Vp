@@ -51,6 +51,7 @@ def has(session, needle: str, chat_id: int | None = None) -> bool:
 async def register(harness: Harness, user_id: int, *, name: str, age: int, gender: str, seeking: str) -> None:
     """Проходит регистрацию так, как это сделал бы человек."""
     await harness.send(user_id, "/start")
+    await harness.click(user_id, "reg:begin:")
     await harness.click(user_id, "reg:rules_ok:")
     await harness.send(user_id, name)
     await harness.send(user_id, str(age))
@@ -80,41 +81,57 @@ async def main() -> None:
     harness = Harness(db, settings, config)
     session = harness.session
 
-    print("\n▶ Первый запуск: приветствие, потом предупреждение")
+    print("\n▶ Первый запуск: обычное приветствие и кнопка")
     session.clear()
     await harness.send(ALICE, "/start")
     texts_seen = session.texts(ALICE)
-    check("приветствие показано первым", "Это бот знакомств" in texts_seen[0], texts_seen[0][:40])
-    check("предупреждение идёт после приветствия", has(session, "Прочитай перед началом", ALICE))
-    check("в предупреждении есть возраст 18+", has(session, "18 лет", ALICE))
-    check("в предупреждении есть про деньги", has(session, "Денег здесь никто не просит", ALICE))
-    check("в предупреждении есть про шантаж", has(session, "не плати", ALICE))
-    check("сказано, что переписку без жалобы не читают", has(session, "никто не читает", ALICE))
+    check(
+        "приветствие обращается по юзернейму",
+        f"Приветствую тебя, @user{ALICE}" in texts_seen[0],
+        texts_seen[0][:60],
+    )
+    check("коротко сказано, зачем бот", has(session, "создан для знакомств", ALICE))
+    check("есть кнопка создания анкеты", "reg:begin:" in session.all_buttons(ALICE))
+    check("предупреждения в приветствии нет", not has(session, "мошенник", ALICE))
+    greeting = texts_seen[0]
+    for word in ("бан", "ботоферм", "модерац", "подписк"):
+        check(f"в приветствии нет слова «{word}»", word not in greeting.lower(), greeting[:80])
+
+    print("\n▶ Предупреждение — только после нажатия кнопки")
+    session.clear()
+    await harness.click(ALICE, "reg:begin:")
+    check("показано предупреждение", has(session, "Пара важных вещей", ALICE))
+    check("оформлено цитатами", session.texts(ALICE)[0].count("<blockquote>") >= 3)
+    check("есть про деньги", has(session, "Денег здесь никто не просит", ALICE))
+    check("есть про шантаж", has(session, "не плати", ALICE))
+    check("есть про первую встречу", has(session, "Людное место", ALICE))
+    check("есть про возраст", has(session, "Тебе есть 18", ALICE))
     check("есть кнопка согласия", "reg:rules_ok:" in session.all_buttons(ALICE))
     check("есть кнопка безопасности", "reg:safety:" in session.all_buttons(ALICE))
+    check("кнопки отказа нет", "reg:rules_no:" not in session.all_buttons(ALICE))
 
     session.clear()
     await harness.click(ALICE, "reg:safety:")
     check("памятка о мошенниках открывается", has(session, "Признаки мошенника"))
     check("сказано не платить шантажисту", has(session, "Не плати"))
+    check("в памятке есть про приватность", has(session, "никто не читает"))
     check("из памятки можно сразу принять правила", "reg:rules_ok:" in session.all_buttons(ALICE))
 
     session.clear()
     await harness.click(ALICE, "reg:rules_back:")
-    check("возврат к предупреждению работает", has(session, "Прочитай перед началом", ALICE))
-    await harness.click(ALICE, "reg:rules_no:")
-    check("отказ обрабатывается", has(session, "Без согласия с правилами"))
+    check("возврат к предупреждению работает", has(session, "Пара важных вещей", ALICE))
     stored = await users.get(db, ALICE)
-    check("правила не приняты при отказе", not stored.get("rules_accepted_at"))
+    check("правила ещё не приняты", not stored.get("rules_accepted_at"))
 
     print("\n▶ Кнопка появляется только после паузы на чтение")
     await settings.set("warning_delay", "2")
     session.clear()
     await harness.send(700, "/start")
+    await harness.click(700, "reg:begin:")
     warning_calls = [
         payload
         for name, payload in session.calls
-        if name == "SendMessage" and "Прочитай перед началом" in (payload.get("text") or "")
+        if name == "SendMessage" and "Пара важных вещей" in (payload.get("text") or "")
     ]
     check("предупреждение отправлено без кнопок", bool(warning_calls) and not warning_calls[0].get("reply_markup"))
     check("видно, сколько ждать", any("Кнопка появится через" in (p.get("text") or "") for p in warning_calls))
@@ -144,7 +161,8 @@ async def main() -> None:
     print("\n▶ Регистрация")
     session.clear()
     await harness.send(ALICE, "/start")
-    check("приветствие показывается снова", has(session, "Это бот знакомств", ALICE))
+    check("приветствие показывается снова", has(session, "создан для знакомств", ALICE))
+    await harness.click(ALICE, "reg:begin:")
     await harness.click(ALICE, "reg:rules_ok:")
     check("начался шаг с именем", has(session, "Шаг 1/7"))
 
@@ -204,7 +222,16 @@ async def main() -> None:
     session.clear()
     await harness.send(ALICE, "/start")
     check("с анкетой /start здоровается по имени", has(session, "С возвращением, Аня", ALICE))
-    check("предупреждение больше не показывают", not has(session, "Прочитай перед началом", ALICE))
+    check("предупреждение больше не показывают", not has(session, "Пара важных вещей", ALICE))
+    check("кнопки создания анкеты нет", "reg:begin:" not in session.all_buttons(ALICE))
+
+    # Кнопка из старого приветствия остаётся в переписке — нажатие не должно
+    # заново запускать анкету поверх готовой
+    session.clear()
+    await harness.click(ALICE, "reg:begin:")
+    check("старая кнопка не сбрасывает анкету", not has(session, "Шаг 1/7", ALICE))
+    check("вместо этого открылось меню", not has(session, "Пара важных вещей", ALICE))
+    check("анкета цела", bool((await profiles.get(db, ALICE))["is_complete"]))
     menu_calls = [
         payload
         for name, payload in session.calls
@@ -425,7 +452,7 @@ async def main() -> None:
     session.clear()
     await harness.click(CARL, f"fd:like:{BORIS}")
     check("второй лайк упирается в лимит", any("Лимит лайков" in a for a in session.alerts()))
-    check("объяснили, зачем лимит", has(session, "отсекаем ботофермы", CARL))
+    check("объяснили, зачем лимит", has(session, "чтобы лайки что-то значили", CARL))
     check("дизлайки не ограничены", has(session, "Дизлайки не ограничены", CARL))
 
     session.clear()
@@ -494,6 +521,7 @@ async def main() -> None:
     print("\n▶ Город: распознавание и геопозиция")
     session.clear()
     await harness.send(GEO, "/start")
+    await harness.click(GEO, "reg:begin:")
     await harness.click(GEO, "reg:rules_ok:")
     await harness.send(GEO, "Гео")
     await harness.send(GEO, "28")
@@ -630,7 +658,14 @@ async def main() -> None:
 
     session.clear()
     await harness.send(BORIS, "/start")
-    check("перед анкетой снова показали памятку", has(session, "Прочитай перед началом", BORIS))
+    check("предлагают продолжить анкету", "reg:begin:" in session.all_buttons(BORIS))
+    check(
+        "и кнопка говорит «продолжить», а не «создать»",
+        any("Продолжить анкету" in str(b) for b in session.button_labels(BORIS)),
+        str(session.button_labels(BORIS)),
+    )
+    await harness.click(BORIS, "reg:begin:")
+    check("перед анкетой снова показали памятку", has(session, "Пара важных вещей", BORIS))
     await harness.click(BORIS, "reg:rules_ok:")
     check("бот просит только фото", has(session, "не хватает фотографии", BORIS))
     check("заново имя не спрашивают", not has(session, "Шаг 1/7", BORIS))
@@ -647,6 +682,7 @@ async def main() -> None:
     await settings.set("reg_burst_limit", "1")
     session.clear()
     await harness.send(NEWBIE, "/start")
+    await harness.click(NEWBIE, "reg:begin:")
     await harness.click(NEWBIE, "reg:rules_ok:")
     check("капча показана", has(session, "Быстрая проверка", NEWBIE))
 
@@ -789,6 +825,7 @@ async def main() -> None:
 
     session.clear()
     await harness.send(BORIS, "/start")
+    await harness.click(BORIS, "reg:begin:")
     await harness.click(BORIS, "reg:rules_ok:")
     await harness.send(BORIS, "", photo=stolen)
     check("повторная загрузка запрещена", has(session, "заблокировано модерацией", BORIS))
