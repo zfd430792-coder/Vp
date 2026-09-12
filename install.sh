@@ -33,12 +33,6 @@ MIN_PY_MINOR=10
 TOTAL_STEPS=7
 
 # Имя глобальной команды: чтобы управлять ботом из любой папки, без cd
-LAUNCHER_PRIMARY="bot"
-LAUNCHER_FALLBACK="dating-bot"
-LAUNCHER_NAME=""
-LAUNCHER_PATH=""
-LAUNCHER_ON_PATH=1
-LAUNCHER_PROFILES=""
 
 step_no=0
 step() {
@@ -419,92 +413,9 @@ printf '%s\n' "$MODE" > "$PROJECT_DIR/data/runmode"
 
 step "Делаю команду для управления"
 
-launcher_dir() {
-    # Под root — общесистемный каталог, иначе личный каталог пользователя
-    if [ "$(id -u)" -eq 0 ] && [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-        printf '/usr/local/bin'
-    else
-        printf '%s/.local/bin' "$HOME"
-    fi
-}
-
-launcher_is_ours() {
-    # Наш лаунчер узнаём по метке внутри файла
-    [ -f "$1" ] && grep -q 'DATING_BOT_LAUNCHER' "$1" 2>/dev/null
-}
-
-write_launcher() {
-    # Обёртка знает путь к проекту, поэтому команду можно звать откуда угодно
-    cat > "$1" <<LAUNCHER
-#!/usr/bin/env bash
-# DATING_BOT_LAUNCHER — создано install.sh, управление ботом знакомств
-BOT_DIR="$PROJECT_DIR"
-
-if [ ! -f "\$BOT_DIR/manage.sh" ]; then
-    printf 'Каталог бота не найден: %s\n' "\$BOT_DIR" >&2
-    printf 'Похоже, проект переместили или удалили.\n' >&2
-    printf 'Запустите установку заново из нового места: bash install.sh\n' >&2
-    exit 1
-fi
-
-# Имя команды нужно, чтобы подсказки показывали «bot …», а не «./manage.sh …»
-export BOT_CMD="\$(basename "\$0")"
-exec bash "\$BOT_DIR/manage.sh" "\$@"
-LAUNCHER
-    chmod +x "$1"
-}
-
-add_to_path() {
-    # Дописываем каталог в профили оболочки, помечая свою строку
-    local dir="$1" added=""
-    for profile in "$HOME/.bashrc" "$HOME/.zshrc" "$HOME/.profile"; do
-        [ -f "$profile" ] || continue
-        if grep -Fq "$dir" "$profile" 2>/dev/null; then
-            continue
-        fi
-        {
-            printf '\n# Добавлено install.sh бота знакомств\n'
-            printf 'export PATH="%s:$PATH"\n' "$dir"
-        } >> "$profile" 2>/dev/null || continue
-        added="$added $(basename "$profile")"
-    done
-    LAUNCHER_PROFILES="$added"
-}
-
-BIN_DIR="$(launcher_dir)"
-if ! mkdir -p "$BIN_DIR" 2>/dev/null; then
-    ui_warn "не удалось создать каталог $BIN_DIR — глобальной команды не будет"
-    ui_note "управляйте ботом из папки проекта: ./manage.sh status"
-else
-    LAUNCHER_NAME="$LAUNCHER_PRIMARY"
-    EXISTING="$(command -v "$LAUNCHER_PRIMARY" 2>/dev/null || true)"
-    if [ -n "$EXISTING" ] && ! launcher_is_ours "$EXISTING"; then
-        # Имя занято чужой программой — не перетираем её
-        LAUNCHER_NAME="$LAUNCHER_FALLBACK"
-        ui_note "имя «$LAUNCHER_PRIMARY» уже занято, беру «$LAUNCHER_FALLBACK»"
-    fi
-
-    LAUNCHER_PATH="$BIN_DIR/$LAUNCHER_NAME"
-    if write_launcher "$LAUNCHER_PATH"; then
-        ui_ok "команда «$LAUNCHER_NAME» готова: $LAUNCHER_PATH"
-        case ":$PATH:" in
-            *":$BIN_DIR:"*) LAUNCHER_ON_PATH=1 ;;
-            *)
-                LAUNCHER_ON_PATH=0
-                add_to_path "$BIN_DIR"
-                if [ -n "$LAUNCHER_PROFILES" ]; then
-                    ui_note "каталог добавлен в профиль:$LAUNCHER_PROFILES"
-                    ui_note "команда заработает в новом терминале"
-                else
-                    ui_warn "каталог $BIN_DIR не в PATH — добавьте его сами"
-                fi
-                ;;
-        esac
-    else
-        LAUNCHER_NAME=""
-        ui_warn "записать команду не удалось — управляйте из папки проекта"
-    fi
-fi
+# shellcheck source=scripts/launcher.sh
+. "$PROJECT_DIR/scripts/launcher.sh"
+install_launcher "$PROJECT_DIR" || true
 
 # ------------------------------------------------------------------ 7. запуск
 
@@ -570,7 +481,7 @@ if [ -n "$LAUNCHER_NAME" ]; then
     if [ "$LAUNCHER_ON_PATH" -eq 0 ]; then
         ui_blank
         ui_text "Команда заработает в новом терминале. Прямо сейчас:"
-        ui_sub "export PATH=\"$BIN_DIR:\$PATH\""
+        ui_sub "export PATH=\"$LAUNCHER_DIR:\$PATH\""
     fi
 else
     ui_text "Управление — из папки проекта"

@@ -36,6 +36,8 @@ ok()   { [ "$QUIET" -eq 1 ] || printf '  %s✔%s %s\n' "$UI_GREEN" "$UI_R" "$1";
 warn() { printf '  %s!%s %s\n' "$UI_YELLOW" "$UI_R" "$1"; }
 # В тихом режиме о неудаче сообщает вызывающий скрипт, чтобы не было двух строк
 fail() { [ "$QUIET" -eq 1 ] || printf '  %s✘%s %s\n' "$UI_RED" "$UI_R" "$1"; }
+# А о поломке установки сообщаем всегда: иначе бот молча не запустится
+hard_fail() { printf '  %s✘%s %s\n' "$UI_RED" "$UI_R" "$1"; }
 say()  { [ "$QUIET" -eq 1 ] || printf '  %s\n' "$1"; }
 
 MODE="plain"
@@ -143,6 +145,10 @@ do_start() {
             if supervisor_alive; then
                 ok "сторож уже работает и ждёт следующей попытки"
                 return 0
+            fi
+            if [ ! -f "$PROJECT_DIR/scripts/run_forever.sh" ]; then
+                hard_fail "нет файла scripts/run_forever.sh — репозиторий скачан не полностью"
+                return 1
             fi
             mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/data"
             nohup bash "$PROJECT_DIR/scripts/run_forever.sh" >/dev/null 2>&1 &

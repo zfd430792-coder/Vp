@@ -12,7 +12,23 @@
 
 set -uo pipefail
 
-PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Этот скрипт обновляет в том числе сам себя. bash дочитывает файл по ходу
+# выполнения, поэтому подмена на середине может оборвать работу на любом месте.
+# Чтобы этого не случилось, выполняемся из временной копии, а каталог проекта
+# передаём через переменную окружения.
+if [ -n "${UPDATE_PROJECT_DIR:-}" ]; then
+    PROJECT_DIR="$UPDATE_PROJECT_DIR"
+    trap 'rm -f "${UPDATE_COPY:-}"' EXIT
+else
+    PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SELF_COPY="$(mktemp 2>/dev/null || printf '/tmp/update-bot.%s.sh' "$$")"
+    if cat "${BASH_SOURCE[0]}" > "$SELF_COPY" 2>/dev/null; then
+        export UPDATE_PROJECT_DIR="$PROJECT_DIR" UPDATE_COPY="$SELF_COPY"
+        exec bash "$SELF_COPY" "$@"
+    fi
+    rm -f "$SELF_COPY"
+fi
+
 cd "$PROJECT_DIR"
 
 if [ ! -f "$PROJECT_DIR/scripts/ui.sh" ]; then
@@ -208,6 +224,20 @@ PYCODE
 fi
 
 chmod +x "$PROJECT_DIR"/*.sh "$PROJECT_DIR"/scripts/*.sh 2>/dev/null || true
+
+# Обновление могло принести новую версию команды управления — обновляем обёртку.
+# Так человек, поставивший бота раньше, получает команду «bot» без переустановки.
+if [ -f "$PROJECT_DIR/scripts/launcher.sh" ]; then
+    # shellcheck source=scripts/launcher.sh
+    . "$PROJECT_DIR/scripts/launcher.sh"
+    if install_launcher "$PROJECT_DIR" quiet; then
+        ui_ok "команда «$LAUNCHER_NAME» на месте: $LAUNCHER_PATH"
+        if [ "$LAUNCHER_ON_PATH" -eq 0 ]; then
+            ui_note "заработает в новом терминале, либо: export PATH=\"$LAUNCHER_DIR:\$PATH\""
+        fi
+        SELF="$LAUNCHER_NAME"
+    fi
+fi
 
 # ------------------------------------------------------------------ 5. перезапуск и проверка
 
