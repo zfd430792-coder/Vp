@@ -164,6 +164,28 @@ async def toggle_city(query: CallbackQuery, db: Database, user: dict[str, Any]) 
 # --------------------------------------------------------------------------- уведомления
 
 
+@router.callback_query(SettingsCB.filter(F.action == "toggle_verified"))
+async def toggle_verified(query: CallbackQuery, db: Database, user: dict[str, Any]) -> None:
+    profile = await profiles_service.get(db, int(user["id"]))
+    if not profile:
+        await query.answer()
+        return
+    new_value = 0 if profile.get("only_verified") else 1
+    await profiles_service.update(db, int(user["id"]), only_verified=new_value)
+    if new_value:
+        await query.answer(
+            "Показываем только анкеты с ✅. Их меньше, зато они проверены живым селфи.",
+            show_alert=True,
+        )
+    else:
+        await query.answer("Показываем все анкеты")
+    profile = await profiles_service.get(db, int(user["id"]))
+    if profile and query.message:
+        await query.message.edit_text(
+            views.preferences_text(profile), reply_markup=inline.filters_menu(profile)
+        )
+
+
 @router.callback_query(SettingsCB.filter(F.action == "notify"))
 async def notify_menu(query: CallbackQuery, db: Database, user: dict[str, Any]) -> None:
     await query.answer()

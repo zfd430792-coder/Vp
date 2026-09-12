@@ -11,9 +11,28 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.constants import ACT_LIKE, ACT_PASS, ACT_SUPERLIKE, MOD_HOLD, MOD_OK, MOD_REVIEW
+from app.constants import (
+    ACT_LIKE,
+    ACT_PASS,
+    ACT_SUPERLIKE,
+    MOD_HOLD,
+    MOD_OK,
+    MOD_REVIEW,
+)
 from app.db import Database
-from app.services import antifraud, chat, feed, likes, limits, moderation, profiles, stats, users
+from app.services import (
+    antifraud,
+    chat,
+    feed,
+    insights,
+    likes,
+    limits,
+    moderation,
+    profiles,
+    stats,
+    users,
+    verification,
+)
 from app.services.scheduler import Maintenance
 from app.services.settings import Settings
 from app.utils.time import now
@@ -67,7 +86,7 @@ async def make_user(
     gender: str,
     seeking: str = "any",
     city: str = "Москва",
-    bio: str = "Обычное описание для теста",
+    bio: str = "Обычное описание для теста: люблю горы, кофе и настольные игры.",
     photos: int = 2,
     only_my_city: int = 1,
 ) -> None:
@@ -345,8 +364,102 @@ async def main() -> None:
     trust_after = await users.recompute_trust(db, 1001)
     check("возраст аккаунта повышает доверие", trust_after > trust_before, f"{trust_before}→{trust_after}")
     await settings.set("likes_per_day", "60")
+    await settings.set("likes_per_day_new", "30")
     user1 = await users.get(db, 1001)
-    check("старому аккаунту — полный лимит", limits.limit_for(user1, settings) == 60)
+    parts = await limits.breakdown(db, user1, settings)
+    check("база лимита — 30", parts.base == 30, str(parts.base))
+    check(
+        "за заполненную анкету есть надбавка",
+        any("анкета" in label for label, _ in parts.parts),
+        str(parts.parts),
+    )
+    check(
+        "верификация предложена как способ поднять лимит",
+        any("подтвердить" in label for label, _ in parts.available),
+        str(parts.available),
+    )
+    await db.execute("UPDATE users SET verified = 1 WHERE id = ?", (1001,))
+    verified_parts = await limits.breakdown(db, await users.get(db, 1001), settings)
+    check(
+        "верификация поднимает лимит",
+        verified_parts.total > parts.total,
+        f"{parts.total} → {verified_parts.total}",
+    )
+    check("лимит не выше потолка", verified_parts.total <= 60, str(verified_parts.total))
+    await db.execute("UPDATE users SET verified = 0 WHERE id = ?", (1001,))
+
+    print("\n▶ Верификация")
+    fresh = await users.get(db, 1002)
+    allowed, reason = await verification.can_request(db, fresh)
+    check("проверку можно запросить", allowed, reason)
+
+    await verification.start(db, 1002, "покажи два пальца ✌️")
+    await verification.submit(db, 1002, "selfie_file_1002")
+    pending = await users.get(db, 1002)
+    check("заявка в статусе ожидания", pending["verify_status"] == "pending")
+    allowed, reason = await verification.can_request(db, pending)
+    check("повторно отправить нельзя", not allowed and reason == "pending", reason)
+    check("заявка в очереди", await verification.queue_count(db) == 1)
+    queue_rows = await verification.queue(db)
+    check("в очереди видно жест", queue_rows and "два пальца" in str(queue_rows[0]["verify_gesture"]))
+
+    await verification.approve(db, 1002)
+    approved = await users.get(db, 1002)
+    check("анкета подтверждена", bool(approved["verified"]))
+    check("селфи удалено сразу после решения", approved["verify_file_id"] is None)
+    check("очередь опустела", await verification.queue_count(db) == 0)
+    allowed, reason = await verification.can_request(db, approved)
+    check("подтверждённому повтор не нужен", not allowed and reason == "already", reason)
+
+    await verification.revoke(db, 1002)
+    check("верификацию можно отозвать", not (await users.get(db, 1002))["verified"])
+
+    await verification.start(db, 1003, "покажи кулак 👊")
+    await verification.submit(db, 1003, "selfie_file_1003")
+    await verification.reject(db, 1003, "не видно лица")
+    rejected = await users.get(db, 1003)
+    check("отклонение сохраняет причину", rejected["verify_note"] == "не видно лица")
+    check("после отказа фото не хранится", rejected["verify_file_id"] is None)
+    allowed, reason = await verification.can_request(db, rejected)
+    check("после отказа действует пауза", not allowed and reason == "cooldown", reason)
+
+    print("\n▶ Релевантность ленты")
+    await make_user(db, 2001, name="Ищущий", age=28, gender="m", seeking="f")
+    await profiles.update(db, 2001, interests="music,travel,sport", only_my_city=1)
+    await make_user(db, 2002, name="Совпадает", age=26, gender="f", seeking="m")
+    await profiles.update(db, 2002, interests="music,travel,sport")
+    await make_user(db, 2003, name="Не совпадает", age=26, gender="f", seeking="m")
+    await profiles.update(db, 2003, interests="cars")
+    for uid in (2001, 2002, 2003):
+        await db.execute("UPDATE users SET last_active_at = ? WHERE id = ?", (now(), uid))
+
+    seeker = await users.get(db, 2001)
+    seeker_profile = await profiles.get(db, 2001)
+    picks = set()
+    for _ in range(5):
+        candidate = await feed.next_candidate(db, settings, seeker, seeker_profile)
+        picks.add(int(candidate["user_id"]) if candidate else 0)
+    check("общие интересы поднимают анкету", picks == {2002}, str(picks))
+
+    await db.execute("UPDATE users SET verified = 1 WHERE id = ?", (2003,))
+    await profiles.update(db, 2001, only_verified=1)
+    seeker_profile = await profiles.get(db, 2001)
+    verified_only = await feed.count_available(db, settings, seeker, seeker_profile)
+    check("фильтр по верификации работает", verified_only == 1, str(verified_only))
+    candidate = await feed.next_candidate(db, settings, seeker, seeker_profile)
+    check("показывается только подтверждённая анкета", candidate and int(candidate["user_id"]) == 2003)
+    await profiles.update(db, 2001, only_verified=0)
+
+    print("\n▶ Статистика анкеты")
+    await insights.bump(db, 2002, "shown", 5)
+    await insights.bump(db, 2002, "likes_in", 2)
+    await insights.bump(db, 2002, "matches")
+    summary = await insights.summary(db, 2002)
+    check("показы суммируются", summary["shown"] == 5, str(summary))
+    check("лайки суммируются", summary["likes_in"] == 2, str(summary))
+    check("взаимности суммируются", summary["matches"] == 1, str(summary))
+    totals = await insights.totals(db)
+    check("общая сводка считается", totals["shown"] >= 5, str(totals))
 
     print("\n▶ Апелляции")
     appeal_id = await moderation.create_appeal(db, 1006, "Считаю блокировку ошибкой")
@@ -366,7 +479,14 @@ async def main() -> None:
 
     print("\n▶ Статистика")
     data = await stats.overview(db)
-    check("статистика собирается", data["users_total"] == 6, str(data["users_total"]))
+    expected_users = int(
+        await db.fetchval("SELECT COUNT(*) FROM users WHERE status != 'deleted'", (), 0)
+    )
+    check(
+        "статистика собирается",
+        data["users_total"] == expected_users,
+        f'{data["users_total"]} вместо {expected_users}',
+    )
     check("лайки посчитаны", data["likes_day"] >= 5, str(data["likes_day"]))
     check("симпатии посчитаны", data["matches_total"] == 1)
 

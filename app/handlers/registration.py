@@ -14,13 +14,21 @@ from app.constants import MAX_INTERESTS, MAX_PHOTOS, MOD_HOLD, MOD_OK, MOD_REVIE
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline
-from app.services import antifraud, notify
+from app.services import antifraud, notify, render
 from app.services import profiles as profiles_service
-from app.services import render
 from app.services import users as users_service
 from app.services.settings import Settings
 from app.states import Reg
-from app.utils.text import ValidationError, clean_age, clean_bio, clean_city, clean_name, esc, has_contacts, normalize_city
+from app.utils.text import (
+    ValidationError,
+    clean_age,
+    clean_bio,
+    clean_city,
+    clean_name,
+    esc,
+    has_contacts,
+    normalize_city,
+)
 
 router = Router(name="registration")
 

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from typing import Any
-from collections.abc import Awaitable, Callable
 
 from aiogram import BaseMiddleware
 from aiogram.fsm.context import FSMContext

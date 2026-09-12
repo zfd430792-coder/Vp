@@ -9,7 +9,7 @@ from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from app import texts, views
 from app.callbacks import AdminCB
@@ -28,11 +28,10 @@ from app.constants import (
 from app.db import Database
 from app.filters import IsStaff
 from app.keyboards import inline
-from app.services import antifraud, moderation, notify, stats
-from app.services import likes as likes_service
+from app.services import antifraud, moderation, notify, render, stats, verification
 from app.services import chat as chat_service
+from app.services import likes as likes_service
 from app.services import profiles as profiles_service
-from app.services import render
 from app.services import users as users_service
 from app.services.settings import Settings
 from app.states import Admin
@@ -71,6 +70,9 @@ SETTING_TITLES = {
     "report_sla_hours": "⏰ Часов на разбор жалобы",
     "message_keep_days": "🗄 Хранить переписку, дней",
     "min_trust_for_full_limits": "🤝 Доверие для полных лимитов",
+    "trust_for_bonus": "⭐️ Доверие для надбавки к лимиту",
+    "verification_enabled": "✅ Верификация анкет (1/0)",
+    "fresh_profile_boost_days": "🌱 Дней приоритета новым анкетам",
 }
 
 
@@ -95,6 +97,7 @@ async def _menu_text(db: Database, settings: Settings) -> tuple[str, Any]:
     reports = await moderation.queue_count(db)
     appeals = await moderation.appeals_count(db)
     profiles_pending = await moderation.profile_queue_count(db)
+    verify_pending = await verification.queue_count(db)
     flagged = await antifraud.flagged_count(db)
     overdue = await moderation.overdue_reports(db, settings)
 
@@ -108,11 +111,13 @@ async def _menu_text(db: Database, settings: Settings) -> tuple[str, Any]:
     text.append(f"🚩 Открытых жалоб: <b>{reports}</b>")
     text.append(f"📨 Апелляций: <b>{appeals}</b>")
     text.append(f"🔍 Анкет на проверке: <b>{profiles_pending}</b>")
+    text.append(f"✅ Заявок на верификацию: <b>{verify_pending}</b>")
     text.append(f"🤖 Подозрительных аккаунтов: <b>{flagged}</b>")
     markup = inline.admin_menu(
         reports=reports,
         appeals=appeals,
         moderation=profiles_pending,
+        verify=verify_pending,
         flagged=flagged,
         overdue=overdue,
     )
@@ -1062,6 +1067,136 @@ async def admin_appeal_reply_send(
         texts.APPEAL_ANSWER.format(appeal_id=appeal_id, answer=esc(answer)),
     )
     await message.answer("✅ Ответ отправлен.")
+
+
+# --------------------------------------------------------------------------- верификация
+
+
+async def _render_verify(
+    query: CallbackQuery, bot: Bot, db: Database, page: int
+) -> None:
+    total = await verification.queue_count(db)
+    if not total:
+        await _show(query, "✅ Заявок на верификацию нет.", inline.admin_back())
+        return
+
+    page = max(0, min(page, total - 1))
+    rows = await verification.queue(db, limit=1, offset=page)
+    if not rows or query.message is None:
+        await _show(query, "✅ Заявок на верификацию нет.", inline.admin_back())
+        return
+
+    item = rows[0]
+    user_id = int(item["user_id"])
+    photos = await profiles_service.photos(db, user_id)
+
+    # Селфи и фото из анкеты в одном альбоме — так сравнивать проще всего
+    media: list[InputMediaPhoto] = []
+    if item.get("verify_file_id"):
+        media.append(
+            InputMediaPhoto(media=str(item["verify_file_id"]), caption="👆 селфи с жестом")
+        )
+    for photo in photos[:2]:
+        media.append(InputMediaPhoto(media=str(photo["file_id"])))
+    if media:
+        await notify.send_media_group(bot, db, query.message.chat.id, media)
+
+    lines = [
+        f"✅ <b>Заявка на верификацию</b> ({page + 1} из {total})",
+        "",
+        f"Просили показать: <b>{esc(item.get('verify_gesture') or 'жест не сохранён')}</b>",
+        "",
+        f"👤 <code>{user_id}</code>"
+        + (f" · @{esc(item['username'])}" if item.get("username") else ""),
+        f"{esc(item.get('name') or 'без имени')}, {item.get('age') or '—'} · "
+        f"{esc(item.get('city') or '—')}",
+        f"Доверие: {item.get('trust_score', 0)}/100 · регистрация: "
+        f"{fmt_dt(item.get('user_created_at'))}",
+        "",
+        "Первое фото — селфи, следующие — из анкеты. Проверь, что это один человек "
+        "и что жест совпадает.",
+    ]
+    await notify.send_message(
+        bot,
+        db,
+        query.message.chat.id,
+        "\n".join(lines),
+        reply_markup=inline.verify_actions(user_id, page=page),
+    )
+
+
+@router.callback_query(AdminCB.filter(F.action == "verify"))
+async def admin_verify_queue(
+    query: CallbackQuery, callback_data: AdminCB, bot: Bot, db: Database
+) -> None:
+    await query.answer()
+    await _render_verify(query, bot, db, callback_data.page)
+
+
+@router.callback_query(AdminCB.filter(F.action == "vf_ok"))
+async def admin_verify_approve(
+    query: CallbackQuery,
+    callback_data: AdminCB,
+    bot: Bot,
+    db: Database,
+    user: dict[str, Any],
+) -> None:
+    target_id = callback_data.target
+    await verification.approve(db, target_id)
+    await users_service.recompute_trust(db, target_id)
+    await moderation.log_action(db, int(user["id"]), "verify_approved", target_id=target_id)
+    await notify.send_message(bot, db, target_id, texts.VERIFY_DONE)
+    await query.answer("Анкета подтверждена")
+    await _render_verify(query, bot, db, callback_data.page)
+
+
+@router.callback_query(AdminCB.filter(F.action == "vf_no"))
+async def admin_verify_reject(
+    query: CallbackQuery,
+    callback_data: AdminCB,
+    bot: Bot,
+    db: Database,
+    user: dict[str, Any],
+) -> None:
+    target_id = callback_data.target
+    reason = "на селфи не видно лица или нужного жеста"
+    await verification.reject(db, target_id, reason)
+    await moderation.log_action(db, int(user["id"]), "verify_rejected", target_id=target_id)
+    await notify.send_message(
+        bot, db, target_id, texts.VERIFY_FAILED.format(reason=esc(reason))
+    )
+    await query.answer("Отклонено")
+    await _render_verify(query, bot, db, callback_data.page)
+
+
+@router.callback_query(AdminCB.filter(F.action == "vf_fake"))
+async def admin_verify_fake(
+    query: CallbackQuery,
+    callback_data: AdminCB,
+    bot: Bot,
+    db: Database,
+    user: dict[str, Any],
+) -> None:
+    """Селфи и анкета — разные люди: прячем анкету и ставим её в очередь разбора."""
+    target_id = callback_data.target
+    reason = "селфи не совпадает с фотографиями анкеты"
+    await verification.reject(db, target_id, reason)
+    await profiles_service.set_moderation(db, target_id, MOD_HOLD, "чужие фотографии")
+    await antifraud.log_event(db, target_id, "photo_reuse", meta={"source": "verification"})
+    await users_service.recompute_trust(db, target_id)
+    await moderation.log_action(db, int(user["id"]), "verify_fake", target_id=target_id)
+    await notify.send_message(
+        bot,
+        db,
+        target_id,
+        "⏸ <b>Анкета скрыта из поиска</b>\n\n"
+        f"Причина: {esc(reason)}.\n\n"
+        "Если на фото действительно ты — загрузи свои снимки и отправь апелляцию, "
+        "модератор проверит ещё раз.",
+        reply_markup=inline.appeal_button(),
+    )
+    await query.answer("Анкета скрыта")
+    await _render_verify(query, bot, db, callback_data.page)
 
 
 # --------------------------------------------------------------------------- антифрод

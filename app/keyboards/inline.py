@@ -1,8 +1,8 @@
 """Инлайн-клавиатуры."""
 from __future__ import annotations
 
-from typing import Any
 from collections.abc import Iterable, Sequence
+from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -18,7 +18,13 @@ from app.callbacks import (
     ReportCB,
     SettingsCB,
 )
-from app.constants import GENDER_ICONS, GENDERS, INTERESTS, REPORT_CATEGORIES, ROLE_NAMES
+from app.constants import (
+    GENDER_ICONS,
+    GENDERS,
+    INTERESTS,
+    REPORT_CATEGORIES,
+    ROLE_NAMES,
+)
 from app.utils.text import shorten
 
 # --------------------------------------------------------------------------- регистрация
@@ -264,7 +270,9 @@ def after_report(target_id: int) -> InlineKeyboardMarkup:
 # --------------------------------------------------------------------------- анкета и настройки
 
 
-def profile_menu(profile: dict[str, Any]) -> InlineKeyboardMarkup:
+def profile_menu(
+    profile: dict[str, Any], *, verified: bool = False, verify_pending: bool = False
+) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📷 Фотографии", callback_data=ProfileCB(action="photos"))
     builder.button(text="✏️ О себе", callback_data=ProfileCB(action="bio"))
@@ -272,11 +280,42 @@ def profile_menu(profile: dict[str, Any]) -> InlineKeyboardMarkup:
     builder.button(text="🎂 Возраст", callback_data=ProfileCB(action="age"))
     builder.button(text="📍 Город", callback_data=ProfileCB(action="city"))
     builder.button(text="🎯 Интересы", callback_data=ProfileCB(action="interests"))
+    builder.button(text="📊 Статистика анкеты", callback_data=ProfileCB(action="insights"))
+    builder.button(text="❤️ Мой лимит лайков", callback_data=ProfileCB(action="limits"))
+    if not verified:
+        title = "⏳ Проверка селфи идёт" if verify_pending else "✅ Подтвердить анкету"
+        builder.button(text=title, callback_data=ProfileCB(action="verify"))
     if profile.get("is_visible"):
         builder.button(text="⏸ Скрыть из поиска", callback_data=ProfileCB(action="pause"))
     else:
         builder.button(text="▶️ Вернуть в поиск", callback_data=ProfileCB(action="resume"))
-    builder.adjust(2, 2, 2, 1)
+    builder.adjust(2, 2, 2, 2, 1, 1)
+    return builder.as_markup()
+
+
+def verify_start() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📸 Сделать селфи", callback_data=ProfileCB(action="verify_go"))
+    builder.button(text="⬅️ Назад", callback_data=ProfileCB(action="menu"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def verify_actions(user_id: int, *, page: int = 0) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Подтвердить", callback_data=AdminCB(action="vf_ok", target=user_id, page=page)
+    )
+    builder.button(
+        text="❌ Не подходит", callback_data=AdminCB(action="vf_no", target=user_id, page=page)
+    )
+    builder.button(
+        text="🎭 Фейк: скрыть анкету", callback_data=AdminCB(action="vf_fake", target=user_id, page=page)
+    )
+    builder.button(text="👤 Карточка", callback_data=AdminCB(action="user", target=user_id))
+    builder.button(text="⏭ Следующая", callback_data=AdminCB(action="verify", page=page + 1))
+    builder.button(text="🏠 Меню", callback_data=AdminCB(action="menu"))
+    builder.adjust(2, 2, 2)
     return builder.as_markup()
 
 
@@ -319,6 +358,11 @@ def filters_menu(profile: dict[str, Any]) -> InlineKeyboardMarkup:
     builder.button(
         text=f"📍 Только мой город: {city_state}",
         callback_data=SettingsCB(action="toggle_city"),
+    )
+    verified_state = "да" if profile.get("only_verified") else "нет"
+    builder.button(
+        text=f"✅ Только подтверждённые: {verified_state}",
+        callback_data=SettingsCB(action="toggle_verified"),
     )
     builder.button(text="⬅️ Назад", callback_data=SettingsCB(action="menu"))
     builder.adjust(1)
@@ -378,7 +422,13 @@ def appeal_button() -> InlineKeyboardMarkup:
 
 
 def admin_menu(
-    *, reports: int = 0, appeals: int = 0, moderation: int = 0, flagged: int = 0, overdue: int = 0
+    *,
+    reports: int = 0,
+    appeals: int = 0,
+    moderation: int = 0,
+    verify: int = 0,
+    flagged: int = 0,
+    overdue: int = 0,
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     reports_text = f"🚩 Жалобы ({reports})" if reports else "🚩 Жалобы"
@@ -394,6 +444,10 @@ def admin_menu(
         callback_data=AdminCB(action="mod"),
     )
     builder.button(
+        text=f"✅ Верификация ({verify})" if verify else "✅ Верификация",
+        callback_data=AdminCB(action="verify"),
+    )
+    builder.button(
         text=f"🤖 Антифрод ({flagged})" if flagged else "🤖 Антифрод",
         callback_data=AdminCB(action="fraud"),
     )
@@ -403,7 +457,7 @@ def admin_menu(
     builder.button(text="⚙️ Настройки бота", callback_data=AdminCB(action="cfg"))
     builder.button(text="👮 Команда", callback_data=AdminCB(action="staff"))
     builder.button(text="📜 Журнал действий", callback_data=AdminCB(action="log"))
-    builder.adjust(1, 1, 1, 1, 1, 2, 2, 1)
+    builder.adjust(1, 1, 1, 1, 1, 1, 2, 2, 1)
     return builder.as_markup()
 
 

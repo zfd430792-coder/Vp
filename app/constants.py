@@ -57,6 +57,31 @@ SHADOW_TITLES = {
     3: "сильное ограничение",
 }
 
+# Верификация анкеты: живое селфи с заданным жестом
+VERIFY_NONE = "none"
+VERIFY_PENDING = "pending"
+VERIFY_OK = "ok"
+VERIFY_REJECTED = "rejected"
+
+VERIFY_GESTURES: tuple[str, ...] = (
+    "подними вверх большой палец 👍",
+    "покажи два пальца ✌️",
+    "покажи открытую ладонь 🖐",
+    "приложи ладонь к щеке",
+    "сложи руки в сердечко 🫶",
+    "покажи кулак 👊",
+)
+VERIFY_ATTEMPTS_PER_DAY = 3
+VERIFY_RETRY_COOLDOWN = 3600
+
+# Из чего складывается суточный лимит лайков
+BONUS_FULL_PROFILE = 10   # 2+ фото и живое описание
+BONUS_VERIFIED = 20       # пройдена верификация
+BONUS_TRUSTED = 10        # высокое доверие и не новый аккаунт
+PENALTY_FRESH = 10        # аккаунт младше суток
+PENALTY_LOW_TRUST = 10    # доверие ниже порога
+MIN_LIKES_LIMIT = 5       # меньше этого лимит не опускается
+
 INTERESTS: dict[str, str] = {
     "music": "🎧 Музыка",
     "movies": "🎬 Кино",
@@ -116,4 +141,7 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "report_sla_hours": "6",        # через сколько часов без ответа жалоба считается просроченной
     "message_keep_days": "30",      # сколько дней хранится переписка для разбора жалоб
     "min_trust_for_full_limits": "40",
+    "trust_for_bonus": "70",        # доверие, с которого даётся бонус к лимиту
+    "verification_enabled": "1",    # можно ли подтверждать анкету селфи
+    "fresh_profile_boost_days": "3",  # сколько дней новые анкеты получают приоритет
 }

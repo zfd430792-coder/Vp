@@ -10,18 +10,25 @@ from aiogram.types import CallbackQuery, Message
 
 from app import texts, views
 from app.callbacks import ProfileCB
-from app.constants import BIO_MAX_LEN, MAX_INTERESTS, MAX_PHOTOS, MOD_HOLD
+from app.config import Config
+from app.constants import (
+    BIO_MAX_LEN,
+    BONUS_VERIFIED,
+    MAX_INTERESTS,
+    MAX_PHOTOS,
+    MOD_HOLD,
+    VERIFY_PENDING,
+    VERIFY_RETRY_COOLDOWN,
+)
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline
-from app.services import antifraud
+from app.services import antifraud, insights, notify, render, verification
 from app.services import likes as likes_service
 from app.services import limits as limits_service
-from app.services import notify
 from app.services import profiles as profiles_service
-from app.services import render
 from app.services.settings import Settings
-from app.states import Edit
+from app.states import Edit, Verify
 from app.utils.text import (
     ValidationError,
     clean_age,
@@ -29,7 +36,9 @@ from app.utils.text import (
     clean_city,
     clean_name,
     has_contacts,
+    human_delta,
 )
+from app.utils.time import now
 
 router = Router(name="profile")
 
@@ -65,7 +74,16 @@ async def show_profile(
         text += "\n\n" + restriction
 
     message_ids = await render.send_card(
-        bot, db, chat_id, card, keyboard=inline.profile_menu(card), show_activity=False
+        bot,
+        db,
+        chat_id,
+        card,
+        keyboard=inline.profile_menu(
+            card,
+            verified=bool(card.get("verified")),
+            verify_pending=verification.status_of(user) == VERIFY_PENDING,
+        ),
+        show_activity=False,
     )
     # Карточка показана целиком, отдельным сообщением — состояние и статистика
     message = await notify.send_message(bot, db, chat_id, text)
@@ -101,6 +119,133 @@ async def back_to_profile(
     if query.message is None:
         return
     await show_profile(bot, db, settings, state, query.message.chat.id, user)
+
+
+@router.callback_query(ProfileCB.filter(F.action == "insights"))
+async def show_insights(
+    query: CallbackQuery, bot: Bot, db: Database, user: dict[str, Any]
+) -> None:
+    """Честная статистика анкеты и конкретные советы вместо продажи «буста»."""
+    await query.answer()
+    if query.message is None:
+        return
+    user_id = int(user["id"])
+    card = await profiles_service.get(db, user_id)
+    if not card:
+        return
+    stats = await insights.summary(db, user_id)
+    photos = await profiles_service.count_photos(db, user_id)
+    await notify.send_message(
+        bot,
+        db,
+        query.message.chat.id,
+        views.insights_text(
+            stats, card=card, photos=photos, verified=bool(user.get("verified"))
+        ),
+    )
+
+
+@router.callback_query(ProfileCB.filter(F.action == "limits"))
+async def show_limits(
+    query: CallbackQuery, bot: Bot, db: Database, settings: Settings, user: dict[str, Any]
+) -> None:
+    await query.answer()
+    if query.message is None:
+        return
+    limits = await limits_service.breakdown(db, user, settings)
+    await notify.send_message(bot, db, query.message.chat.id, views.limit_details(limits))
+
+
+# --------------------------------------------------------------------------- верификация
+
+
+@router.callback_query(ProfileCB.filter(F.action == "verify"))
+async def verify_intro(
+    query: CallbackQuery, db: Database, settings: Settings, user: dict[str, Any]
+) -> None:
+    if not settings.get_bool("verification_enabled", True):
+        await query.answer(texts.VERIFY_OFF, show_alert=True)
+        return
+
+    allowed, reason = await verification.can_request(db, user)
+    if not allowed:
+        messages = {
+            "already": texts.VERIFY_ALREADY,
+            "pending": texts.VERIFY_IN_PROGRESS,
+            "attempts": texts.VERIFY_ATTEMPTS,
+            "cooldown": texts.VERIFY_COOLDOWN.format(
+                left=human_delta(
+                    VERIFY_RETRY_COOLDOWN - (now() - int(user.get("verify_at") or 0))
+                )
+            ),
+        }
+        await query.answer(messages.get(reason, texts.VERIFY_OFF), show_alert=True)
+        return
+
+    await query.answer()
+    if query.message:
+        await query.message.answer(
+            texts.VERIFY_INTRO.format(bonus=BONUS_VERIFIED),
+            reply_markup=inline.verify_start(),
+        )
+
+
+@router.callback_query(ProfileCB.filter(F.action == "verify_go"))
+async def verify_ask(
+    query: CallbackQuery, state: FSMContext, db: Database, user: dict[str, Any]
+) -> None:
+    allowed, _ = await verification.can_request(db, user)
+    if not allowed:
+        await query.answer(texts.VERIFY_IN_PROGRESS, show_alert=True)
+        return
+
+    gesture = verification.pick_gesture()
+    await verification.start(db, int(user["id"]), gesture)
+    await state.set_state(Verify.selfie)
+    await query.answer()
+    if query.message:
+        await query.message.answer(texts.VERIFY_ASK.format(gesture=gesture))
+
+
+@router.message(Verify.selfie, F.photo)
+async def verify_selfie(
+    message: Message,
+    bot: Bot,
+    state: FSMContext,
+    db: Database,
+    config: Config,
+    user: dict[str, Any],
+) -> None:
+    user_id = int(user["id"])
+    best = message.photo[-1]
+
+    # Селфи не должно совпадать с фото из анкеты: так проверка теряет смысл
+    own = await db.fetchone(
+        "SELECT 1 FROM photos WHERE user_id = ? AND file_unique_id = ?",
+        (user_id, best.file_unique_id),
+    )
+    if own:
+        await message.answer(
+            "⚠️ Это фотография из твоей анкеты. Нужно новое селфи, сделанное сейчас, "
+            "с нужным жестом."
+        )
+        return
+
+    await verification.submit(db, user_id, best.file_id)
+    await antifraud.log_event(db, user_id, "verify_sent", weight=0)
+    await state.set_state(None)
+    await message.answer(texts.VERIFY_SENT)
+    await notify.notify_staff(
+        bot,
+        db,
+        f"✅ <b>Новая заявка на верификацию</b>\nОт: <code>{user_id}</code>",
+        chat_id=config.moderation_chat_id,
+    )
+
+
+@router.message(Verify.selfie)
+async def verify_wrong_type(message: Message) -> None:
+    await message.answer(texts.VERIFY_WRONG_TYPE)
 
 
 # --------------------------------------------------------------------------- фотографии

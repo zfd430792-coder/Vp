@@ -16,9 +16,8 @@ from app.handlers import ui
 from app.handlers.feed import celebrate_match
 from app.keyboards import inline
 from app.services import likes as likes_service
-from app.services import notify
+from app.services import notify, render
 from app.services import profiles as profiles_service
-from app.services import render
 
 router = Router(name="likes")
 

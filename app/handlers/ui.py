@@ -11,11 +11,10 @@ from app.constants import ROLE_MODERATOR
 from app.db import Database
 from app.keyboards import inline, reply
 from app.services import feed as feed_service
+from app.services import insights, notify, render
 from app.services import likes as likes_service
 from app.services import limits as limits_service
-from app.services import notify
 from app.services import profiles as profiles_service
-from app.services import render
 from app.services import users as users_service
 from app.services.settings import Settings
 from app.utils.text import esc, human_delta
@@ -118,6 +117,8 @@ async def show_next_profile(
     )
     await remember_ui(state, message_ids)
     await state.update_data(feed_target=target_id)
+    if message_ids:
+        await insights.bump(db, target_id, "shown")
     return True
 
 

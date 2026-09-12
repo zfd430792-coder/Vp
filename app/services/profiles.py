@@ -31,7 +31,7 @@ async def update(db: Database, user_id: int, **fields: Any) -> None:
     """Обновляет произвольные поля анкеты (белый список колонок)."""
     allowed = {
         "name", "age", "gender", "seeking", "city", "city_norm", "bio", "bio_hash", "interests",
-        "age_min", "age_max", "only_my_city", "is_complete", "is_visible",
+        "age_min", "age_max", "only_my_city", "only_verified", "is_complete", "is_visible",
         "moderation", "moderation_note",
     }
     payload = {key: value for key, value in fields.items() if key in allowed}
@@ -162,7 +162,7 @@ async def card(db: Database, user_id: int) -> dict[str, Any] | None:
         """
         SELECT p.*, u.username, u.tg_name, u.last_active_at, u.created_at AS user_created_at,
                u.trust_score, u.status, u.role, u.warns, u.shadow_level, u.shadow_until,
-               u.ban_permanent, u.ban_until, u.bot_blocked
+               u.ban_permanent, u.ban_until, u.bot_blocked, u.verified, u.verify_status
           FROM profiles p
           JOIN users u ON u.id = p.user_id
          WHERE p.user_id = ?

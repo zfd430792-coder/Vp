@@ -14,12 +14,10 @@ from app.constants import ACT_LIKE, ACT_PASS, ACT_SUPERLIKE, HOUR
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline
-from app.services import antifraud
+from app.services import antifraud, notify, render
 from app.services import likes as likes_service
 from app.services import limits as limits_service
-from app.services import notify
 from app.services import profiles as profiles_service
-from app.services import render
 from app.services import users as users_service
 from app.services.settings import Settings
 from app.states import Like

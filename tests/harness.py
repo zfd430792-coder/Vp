@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import itertools
+from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 from typing import Any
-from collections.abc import AsyncGenerator
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties

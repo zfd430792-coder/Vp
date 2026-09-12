@@ -1,9 +1,10 @@
 """Сборка текстов карточек — анкет, жалоб, админских сводок."""
 from __future__ import annotations
 
-from typing import Any
 from collections.abc import Iterable
+from typing import Any
 
+from app import texts
 from app.constants import (
     GENDER_ICONS,
     INTERESTS,
@@ -82,6 +83,8 @@ def profile_caption(
     title = f"<b>{name}</b>"
     if age:
         title += f", {age}"
+    if card.get("verified"):
+        title += " ✅"
     if city:
         title += f" · 📍 {city}"
     lines.append(title)
@@ -148,7 +151,8 @@ def preferences_text(profile: dict[str, Any]) -> str:
         f"👥 Показывать: <b>{seeking}</b>\n"
         f"🎂 Возраст: <b>{profile.get('age_min', 18)}–{profile.get('age_max', 99)}</b>\n"
         f"📍 Только мой город: <b>{'да' if only_city else 'нет'}</b>"
-        f"{' (' + esc(profile.get('city') or '') + ')' if only_city else ''}\n\n"
+        f"{' (' + esc(profile.get('city') or '') + ')' if only_city else ''}\n"
+        f"✅ Только подтверждённые анкеты: <b>{'да' if profile.get('only_verified') else 'нет'}</b>\n\n"
         "Чем шире фильтры, тем больше анкет в ленте."
     )
 
@@ -163,6 +167,63 @@ def notifications_text(user: dict[str, Any]) -> str:
         f"💞 О взаимных симпатиях: <b>{mark(user.get('notify_matches'))}</b>\n"
         f"💬 О сообщениях: <b>{mark(user.get('notify_messages'))}</b>"
     )
+
+
+def limit_details(limits: Any) -> str:
+    """Расшифровка суточного лимита: за что дали и что можно добавить."""
+    lines = [
+        texts.LIMIT_DETAILS_HEADER.format(total=limits.total),
+        texts.LIMIT_DETAILS_BASE.format(base=limits.base),
+    ]
+    for label, value in limits.parts:
+        sign = "+" if value > 0 else "−"
+        lines.append(f"• {esc(label)} — {sign}{abs(value)}")
+    if limits.available:
+        lines.append(texts.LIMIT_DETAILS_AVAILABLE)
+        for label, value in limits.available:
+            lines.append(f"• {esc(label)} — +{value}")
+    if limits.capped:
+        lines.append(texts.LIMIT_DETAILS_CAP.format(cap=limits.cap))
+    lines.append(texts.LIMIT_DETAILS_FOOTER)
+    return "\n".join(lines)
+
+
+def insights_text(
+    stats: dict[str, int],
+    *,
+    card: dict[str, Any],
+    photos: int,
+    verified: bool,
+) -> str:
+    """Статистика анкеты и конкретные советы, что подкрутить."""
+    shown = int(stats.get("shown") or 0)
+    likes = int(stats.get("likes_in") or 0)
+    matches = int(stats.get("matches") or 0)
+    if not shown and not likes:
+        return texts.INSIGHTS_EMPTY
+
+    rate = round(likes / shown * 100) if shown else 0
+    text = texts.INSIGHTS.format(shown=shown, likes=likes, matches=matches, rate=rate)
+
+    tips: list[str] = []
+    if photos < 2:
+        tips.append("добавь второе фото — анкеты с одним снимком листают чаще")
+    if len(str(card.get("bio") or "").strip()) < 30:
+        tips.append("напиши пару строк о себе: с описанием отвечают заметно охотнее")
+    if not str(card.get("interests") or "").strip():
+        tips.append("выбери интересы — по ним проще найти общую тему")
+    if not verified:
+        tips.append("подтверди анкету селфи: галочка и +лайки к лимиту")
+    if shown and rate < 10 and photos >= 1:
+        tips.append("попробуй сменить главное фото — на нём должно быть видно лицо")
+    if shown < 20:
+        tips.append("смотри ленту чаще: активных показываем первыми")
+    if not card.get("is_visible"):
+        tips.append("анкета на паузе — включи показ, иначе её никто не увидит")
+
+    if not tips:
+        return text + texts.INSIGHTS_ALL_GOOD
+    return text + texts.INSIGHTS_TIPS_HEADER + "\n" + "\n".join(f"• {tip}" for tip in tips[:4])
 
 
 # --------------------------------------------------------------------------- ограничения

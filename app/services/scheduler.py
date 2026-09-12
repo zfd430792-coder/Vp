@@ -11,7 +11,7 @@ from app import texts
 from app.config import Config
 from app.constants import DAY, STATUS_ACTIVE
 from app.db import Database
-from app.services import antifraud, moderation, notify
+from app.services import antifraud, insights, moderation, notify
 from app.services import chat as chat_service
 from app.services.settings import Settings
 from app.utils.time import now
@@ -134,6 +134,10 @@ class Maintenance:
         await self.db.execute(
             "DELETE FROM admin_log WHERE created_at < ?", (moment - 180 * DAY,)
         )
+        removed_stats = await insights.cleanup(self.db)
+        if removed_stats:
+            log.info("Удалено старых записей статистики: %s", removed_stats)
+
         antifraud.tracker.prune()
         chat_service.prune()
         await self.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")

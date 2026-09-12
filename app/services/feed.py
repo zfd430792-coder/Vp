@@ -14,7 +14,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.constants import ACT_PASS, MOD_OK, MOD_REVIEW, STATUS_ACTIVE
+from app.constants import (
+    ACT_PASS,
+    INTERESTS,
+    MAX_INTERESTS,
+    MOD_OK,
+    MOD_REVIEW,
+    STATUS_ACTIVE,
+)
 from app.db import Database
 from app.services.settings import Settings
 from app.utils.time import now
@@ -36,6 +43,7 @@ _BASE_FILTERS = """
          AND (p.seeking = 'any' OR p.seeking = :my_gender)
          AND p.age_min <= :my_age
          AND p.age_max >= :my_age
+         AND (:only_verified = 0 OR u.verified = 1)
          AND (:only_my_city = 0 OR p.city_norm = :my_city)
          AND (p.only_my_city = 0 OR :my_city = '' OR p.city_norm = :my_city)
          AND NOT EXISTS (
@@ -71,7 +79,33 @@ def _params(user: dict[str, Any], profile: dict[str, Any], settings: Settings) -
         "my_age": int(profile.get("age") or 18),
         "my_city": my_city,
         "only_my_city": only_my_city,
+        "only_verified": 1 if profile.get("only_verified") else 0,
+        "fresh_cutoff": moment - max(0, settings.get_int("fresh_profile_boost_days", 3)) * 86400,
     }
+
+
+def _relevance(profile: dict[str, Any], params: dict[str, Any]) -> str:
+    """Выражение «насколько анкета подходит именно этому человеку».
+
+    Считает совпадения по интересам и добавляет небольшой вес подтверждённым
+    и совсем новым анкетам, чтобы новички не тонули в ленте.
+    """
+    codes = [
+        code
+        for code in str(profile.get("interests") or "").split(",")
+        if code and code in INTERESTS
+    ]
+    terms: list[str] = []
+    for index, code in enumerate(codes[:MAX_INTERESTS]):
+        key = f"interest_{index}"
+        params[key] = f"%,{code},%"
+        terms.append(f"(CASE WHEN ',' || p.interests || ',' LIKE :{key} THEN 1 ELSE 0 END)")
+    interest_sum = " + ".join(terms) if terms else "0"
+    return (
+        f"({interest_sum})"
+        " + (CASE WHEN u.verified = 1 THEN 2 ELSE 0 END)"
+        " + (CASE WHEN u.created_at > :fresh_cutoff THEN 1 ELSE 0 END)"
+    )
 
 
 async def next_candidate(
@@ -79,11 +113,18 @@ async def next_candidate(
 ) -> dict[str, Any] | None:
     """Возвращает следующую анкету для показа или None."""
     params = _params(user, profile, settings)
+    relevance = _relevance(profile, params)
     sql = f"""
         SELECT * FROM (
-            SELECT p.*, u.username, u.last_active_at, u.trust_score,
+            SELECT p.*, u.username, u.last_active_at, u.trust_score, u.verified,
                    CASE WHEN u.shadow_level > 0 AND COALESCE(u.shadow_until, 0) > :now
                         THEN u.shadow_level ELSE 0 END AS shadow,
+                   {relevance} AS relevance,
+                   CASE
+                       WHEN u.last_active_at > :now - 86400 THEN 0
+                       WHEN u.last_active_at > :now - 604800 THEN 1
+                       ELSE 2
+                   END AS activity,
                    EXISTS (
                        SELECT 1 FROM likes l2
                         WHERE l2.from_id = p.user_id AND l2.to_id = :me
@@ -102,11 +143,8 @@ async def next_candidate(
         ORDER BY c.superliked_me DESC,
                  c.liked_me DESC,
                  c.shadow ASC,
-                 CASE
-                     WHEN c.last_active_at > :now - 86400 THEN 0
-                     WHEN c.last_active_at > :now - 604800 THEN 1
-                     ELSE 2
-                 END ASC,
+                 c.activity ASC,
+                 c.relevance DESC,
                  RANDOM()
         LIMIT 1
     """
@@ -118,5 +156,6 @@ async def count_available(
 ) -> int:
     """Сколько анкет доступно по текущим фильтрам (без учёта вероятности показа)."""
     params = _params(user, profile, settings)
+    params.pop("fresh_cutoff", None)
     value = await db.fetchval(f"SELECT COUNT(*) {_BASE_FILTERS}", params, 0)
     return int(value)

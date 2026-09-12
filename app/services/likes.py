@@ -6,6 +6,7 @@ from typing import Any
 
 from app.constants import ACT_LIKE, ACT_PASS, ACT_SUPERLIKE, STATUS_ACTIVE
 from app.db import Database
+from app.services import insights
 from app.utils.time import now
 
 
@@ -69,6 +70,7 @@ async def act(
         await db.execute(
             "UPDATE profiles SET likes_received = likes_received + 1 WHERE user_id = ?", (to_id,)
         )
+        await insights.bump(db, to_id, "likes_in")
 
     if not is_positive:
         # Дизлайк закрывает входящий лайк, чтобы он не висел в списке
@@ -106,6 +108,8 @@ async def act(
             "UPDATE profiles SET matches_count = matches_count + 1 WHERE user_id IN (?, ?)",
             (from_id, to_id),
         )
+        await insights.bump(db, from_id, "matches")
+        await insights.bump(db, to_id, "matches")
     else:
         # Пара уже была (например, её закрывали и лайкнули снова) — оживляем её
         await db.execute(
@@ -152,7 +156,7 @@ async def next_incoming(db: Database, user_id: int) -> dict[str, Any] | None:
     params = {"me": user_id, "status_active": STATUS_ACTIVE, "now": now()}
     return await db.fetchone(
         f"""
-        SELECT p.*, u.username, u.last_active_at, l.action AS like_action,
+        SELECT p.*, u.username, u.last_active_at, u.verified, l.action AS like_action,
                l.message AS like_message, l.created_at AS liked_at
         {_INCOMING_FILTER}
         ORDER BY CASE l.action WHEN 'superlike' THEN 0 ELSE 1 END, l.created_at DESC

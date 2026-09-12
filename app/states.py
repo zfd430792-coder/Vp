@@ -34,6 +34,10 @@ class Like(StatesGroup):
     note = State()
 
 
+class Verify(StatesGroup):
+    selfie = State()
+
+
 class Report(StatesGroup):
     comment = State()
 

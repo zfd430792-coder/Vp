@@ -310,7 +310,8 @@ async def _notify_target(
             "Если считаешь, что жалобы несправедливы — напиши апелляцию, её прочитает человек."
         )
     elif action.kind == "shadow":
-        from app.utils.time import fmt_dt, now as _now
+        from app.utils.time import fmt_dt
+        from app.utils.time import now as _now
 
         until = _now() + action.shadow_hours * 3600
         text = texts.SHADOW_NOTICE.format(

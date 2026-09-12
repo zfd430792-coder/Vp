@@ -263,10 +263,10 @@ async def captcha_needs_button(message: Message) -> None:
 @router.message(Command("help"))
 @router.message(F.text == "❓ Помощь")
 async def cmd_help(
-    message: Message, settings: Settings, config: Config, user: dict[str, Any]
+    message: Message, db: Database, settings: Settings, config: Config, user: dict[str, Any]
 ) -> None:
-    limit = limits_service.limit_for(user, settings)
-    await message.answer(texts.help_text(limit, config.support_contact))
+    limits = await limits_service.breakdown(db, user, settings)
+    await message.answer(texts.help_text(limits.total, config.support_contact))
 
 
 @router.message(Command("safety"))

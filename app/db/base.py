@@ -3,9 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
-from collections.abc import Iterable, Sequence
 
 import aiosqlite
 

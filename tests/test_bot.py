@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.config import Config
 from app.db import Database
+from app.services import feed, insights, limits, moderation, profiles, users
 from app.services import likes as likes_service
-from app.services import moderation, profiles, users
 from app.services.settings import Settings
 from tests.harness import Harness
 
@@ -458,6 +458,112 @@ async def main() -> None:
     check("верный ответ пропускает дальше", has(session, "Шаг 1/7", NEWBIE))
     check("капча отмечена пройденной", bool((await users.get(db, NEWBIE))["captcha_passed"]))
     await settings.set("reg_burst_limit", "12")
+
+    print("\n▶ Верификация анкеты")
+    session.clear()
+    await harness.send(DINA, "👤 Моя анкета")
+    check("кнопка верификации есть", "pf:verify:" in session.all_buttons(DINA))
+
+    session.clear()
+    await harness.click(DINA, "pf:verify:")
+    check("объяснили, зачем верификация", has(session, "Подтверждение анкеты", DINA))
+    check("сказано про бонус к лимиту", has(session, "к суточному лимиту", DINA))
+    check("сказано, что селфи не попадёт в анкету", has(session, "не попадёт в анкету", DINA))
+
+    session.clear()
+    await harness.click(DINA, "pf:verify_go:")
+    check("попросили селфи с жестом", has(session, "Сделай селфи", DINA))
+    gesture = (await users.get(db, DINA))["verify_gesture"]
+    check("жест сохранён", bool(gesture), str(gesture))
+
+    session.clear()
+    await harness.send(DINA, "", photo=f"photo_{DINA}_1")
+    check("фото из анкеты не принимается", has(session, "фотография из твоей анкеты", DINA))
+
+    session.clear()
+    await harness.send(DINA, "", photo="dina_selfie")
+    check("селфи принято", has(session, "отправлено на проверку", DINA))
+    check("модератор уведомлён", has(session, "заявка на верификацию", OWNER))
+    pending = await users.get(db, DINA)
+    check("статус — на проверке", pending["verify_status"] == "pending")
+
+    session.clear()
+    await harness.send(OWNER, "/admin")
+    check("в меню видна очередь верификации", has(session, "Заявок на верификацию: <b>1</b>", OWNER))
+
+    session.clear()
+    await harness.click(OWNER, "ad:verify:0:0:")
+    check("селфи и фото анкеты показаны рядом", "SendMediaGroup" in session.methods())
+    check("видно, какой жест просили", has(session, "Просили показать", OWNER))
+    check("есть кнопка подтверждения", any(b.startswith("ad:vf_ok") for b in session.all_buttons(OWNER)))
+
+    limit_before = (await limits.breakdown(db, await users.get(db, DINA), settings)).total
+    session.clear()
+    await harness.click(OWNER, f"ad:vf_ok:{DINA}:0:")
+    verified = await users.get(db, DINA)
+    check("анкета подтверждена", bool(verified["verified"]))
+    check("селфи удалено из базы", verified["verify_file_id"] is None)
+    check("человеку сообщили", has(session, "Анкета подтверждена", DINA))
+    limit_after = (await limits.breakdown(db, verified, settings)).total
+    check("лимит вырос", limit_after > limit_before, f"{limit_before} → {limit_after}")
+
+    session.clear()
+    await harness.send(DINA, "👤 Моя анкета")
+    check("в карточке появилась галочка", has(session, "✅", DINA))
+    check("кнопки верификации больше нет", "pf:verify:" not in session.all_buttons(DINA))
+
+    print("\n▶ Фильтр «только подтверждённые»")
+    session.clear()
+    await harness.send(ALICE, "⚙️ Настройки")
+    await harness.click(ALICE, "st:filters:")
+    check("фильтр показан в настройках", has(session, "Только подтверждённые", ALICE))
+    await harness.click(ALICE, "st:toggle_verified:")
+    check("фильтр включился", (await profiles.get(db, ALICE))["only_verified"] == 1)
+    alice_profile = await profiles.get(db, ALICE)
+    alice_user = await users.get(db, ALICE)
+    only_verified_count = await feed.count_available(db, settings, alice_user, alice_profile)
+    await profiles.update(db, ALICE, only_verified=0)
+    all_count = await feed.count_available(db, settings, alice_user, await profiles.get(db, ALICE))
+    check(
+        "с фильтром анкет меньше",
+        only_verified_count < all_count,
+        f"{only_verified_count} из {all_count}",
+    )
+
+    print("\n▶ Статистика анкеты и лимит")
+    session.clear()
+    await harness.send(DINA, "🔍 Смотреть анкеты")
+    shown = await insights.summary(db, BORIS)
+    check("показы считаются", shown["shown"] >= 1, str(shown))
+
+    session.clear()
+    await harness.send(DINA, "👤 Моя анкета")
+    await harness.click(DINA, "pf:insights:")
+    check("статистика показана", has(session, "Статистика анкеты", DINA))
+
+    session.clear()
+    await harness.click(DINA, "pf:limits:")
+    check("лимит расшифрован", has(session, "Из чего он складывается", DINA))
+    check("видно базу лимита", has(session, "база —", DINA))
+    check("сказано, что лимит нельзя купить", has(session, "нельзя купить", DINA))
+
+    print("\n▶ Отклонение верификации")
+    session.clear()
+    await harness.click(CARL, "pf:verify:")
+    await harness.click(CARL, "pf:verify_go:")
+    await harness.send(CARL, "", photo="carl_selfie")
+    check("заявка отправлена", has(session, "отправлено на проверку", CARL))
+
+    session.clear()
+    await harness.click(OWNER, f"ad:vf_no:{CARL}:0:")
+    rejected = await users.get(db, CARL)
+    check("заявка отклонена", rejected["verify_status"] == "rejected" and not rejected["verified"])
+    check("причина названа", has(session, "не видно лица", CARL))
+    check("сказано, что это не блокировка", has(session, "не блокировка", CARL))
+
+    session.clear()
+    await harness.click(CARL, "pf:verify:")
+    check("повтор только после паузы", any("через" in a for a in session.alerts()))
 
     print("\n▶ Удаление анкеты")
     session.clear()

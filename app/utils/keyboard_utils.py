@@ -1,8 +1,8 @@
 """Мелкие помощники для клавиатур."""
 from __future__ import annotations
 
-from typing import TypeVar
 from collections.abc import Sequence
+from typing import TypeVar
 
 T = TypeVar("T")
 

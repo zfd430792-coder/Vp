@@ -210,6 +210,28 @@ MIGRATIONS: list[list[str]] = [
         )
         """,
     ],
+    # --- версия 2: верификация анкет, фильтр и статистика показов -----------------
+    [
+        "ALTER TABLE users ADD COLUMN verified INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN verify_status TEXT NOT NULL DEFAULT 'none'",
+        "ALTER TABLE users ADD COLUMN verify_file_id TEXT",
+        "ALTER TABLE users ADD COLUMN verify_gesture TEXT",
+        "ALTER TABLE users ADD COLUMN verify_at INTEGER",
+        "ALTER TABLE users ADD COLUMN verify_note TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_users_verify ON users(verify_status, verify_at)",
+        "ALTER TABLE profiles ADD COLUMN only_verified INTEGER NOT NULL DEFAULT 0",
+        """
+        CREATE TABLE IF NOT EXISTS profile_stats (
+            user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            day      INTEGER NOT NULL,
+            shown    INTEGER NOT NULL DEFAULT 0,
+            likes_in INTEGER NOT NULL DEFAULT 0,
+            matches  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, day)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_profile_stats_day ON profile_stats(day)",
+    ],
 ]
 
 
