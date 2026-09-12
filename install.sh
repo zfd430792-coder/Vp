@@ -461,7 +461,7 @@ ui_cmd "./manage.sh status" "состояние и статистика"
 ui_cmd "./manage.sh logs" "живой лог"
 ui_cmd "./manage.sh restart" "перезапуск"
 ui_cmd "./manage.sh stop" "остановить"
-ui_cmd "./manage.sh update" "обновить и перезапустить"
+ui_cmd "./update.sh" "обновить бота, ничего не вводя"
 ui_blank
 ui_rule
 ui_blank

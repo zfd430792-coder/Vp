@@ -855,6 +855,68 @@ async def main() -> None:
             and not any("горы — какой маршрут" in str(m.get("текст")) for m in payload["мои_сообщения"]),
         )
 
+    print("\n▶ Обновление бота из админ-панели")
+    session.clear()
+    await harness.send(OWNER, "/admin")
+    check("в меню есть раздел обновления", "ad:upd:0:0:" in session.all_buttons(OWNER))
+
+    session.clear()
+    await harness.click(OWNER, "ad:upd:0:0:")
+    check("показана текущая версия", has(session, "Обновление бота", OWNER))
+    check(
+        "сказано, что вводить ничего не нужно",
+        has(session, "заново вводить не нужно", OWNER) or has(session, "без истории git", OWNER),
+    )
+    check(
+        "есть кнопка обновления",
+        "ad:upd_start:0:0:" in session.all_buttons(OWNER)
+        or has(session, "без истории git", OWNER),
+    )
+
+    session.clear()
+    await harness.click(OWNER, "ad:upd_check:0:0:")
+    check(
+        "проверка обновлений отвечает",
+        has(session, "последняя версия", OWNER)
+        or has(session, "Есть обновление", OWNER)
+        or has(session, "Не удалось проверить", OWNER),
+    )
+
+    # Модератор обновлять не может: это по сути выкладка кода на сервер
+    await users.set_role(db, ALICE, 1)
+    session.clear()
+    await harness.click(ALICE, "ad:upd_start:0:0:")
+    check("модератору обновление запрещено", any("только владелец" in a for a in session.alerts()))
+    await users.set_role(db, ALICE, 0)
+
+    session.clear()
+    await harness.click(OWNER, "ad:upd_start:0:0:")
+    check("владельцу показано подтверждение", has(session, "Обновить бота?", OWNER))
+    check("предупредили о простое", has(session, "станет недоступен", OWNER))
+    check("сказано про копию базы", has(session, "копия базы", OWNER))
+    check("сказано про откат", has(session, "вернётся текущая", OWNER))
+
+    # Сам скрипт в тестах не запускаем: подменяем запуск и проверяем только связку
+    from app.services import updater as updater_service
+
+    started: list[bool] = []
+    original_start = updater_service.start
+    updater_service.start = lambda project_dir: (started.append(True), True)[1]
+    try:
+        session.clear()
+        await harness.click(OWNER, "ad:upd_go:0:0:")
+    finally:
+        updater_service.start = original_start
+    check("обновление запускается", started == [True], str(started))
+    check("владельцу сказали, что будет дальше", has(session, "Обновление запущено", OWNER))
+    check(
+        "запуск записан в журнал",
+        any(
+            row["action"] == "update_started"
+            for row in await moderation.recent_log(db, limit=5)
+        ),
+    )
+
     print("\n▶ Удаление анкеты")
     session.clear()
     await harness.send(CARL, "/delete")

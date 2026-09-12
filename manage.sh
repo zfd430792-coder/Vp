@@ -31,7 +31,8 @@ done
 
 ok()   { [ "$QUIET" -eq 1 ] || printf '  %s✔%s %s\n' "$UI_GREEN" "$UI_R" "$1"; }
 warn() { printf '  %s!%s %s\n' "$UI_YELLOW" "$UI_R" "$1"; }
-fail() { printf '  %s✘%s %s\n' "$UI_RED" "$UI_R" "$1"; }
+# В тихом режиме о неудаче сообщает вызывающий скрипт, чтобы не было двух строк
+fail() { [ "$QUIET" -eq 1 ] || printf '  %s✘%s %s\n' "$UI_RED" "$UI_R" "$1"; }
 say()  { [ "$QUIET" -eq 1 ] || printf '  %s\n' "$1"; }
 
 MODE="plain"
@@ -198,17 +199,6 @@ finally:
 PYCODE
 }
 
-trim_lines() {
-    # Обрезка по символам: cut -c и awk substr местами считают байты и рвут
-    # кириллицу. Программу передаём файлом, а не через stdin — там данные.
-    local width="${1:-66}"
-    if [ -x "$PY" ] && [ -f "$PROJECT_DIR/scripts/trim.py" ]; then
-        "$PY" "$PROJECT_DIR/scripts/trim.py" "$width"
-    else
-        cat
-    fi
-}
-
 do_status() {
     ui_blank
     ui_rule
@@ -245,11 +235,11 @@ do_status() {
     case "$MODE" in
         systemd-user|systemd-system)
             sc --no-pager -n 8 status "$SERVICE_NAME" 2>/dev/null |
-                tail -n 6 | trim_lines 66 | sed 's/^/       /' || true
+                tail -n 6 | ui_trim 66 | sed 's/^/       /' || true
             ;;
         *)
             if [ -f "$LOG_FILE" ]; then
-                tail -n 8 "$LOG_FILE" | trim_lines 66 | tail -n 6 | sed 's/^/       /'
+                tail -n 8 "$LOG_FILE" | ui_trim 66 | tail -n 6 | sed 's/^/       /'
             else
                 ui_sub "лога пока нет"
             fi
@@ -281,14 +271,10 @@ do_logs() {
 }
 
 do_update() {
+    # Вся логика обновления в update.sh: копия базы, откат при сбое, проверка.
+    # Здесь только единая точка входа, чтобы не держать две реализации.
     check_env
-    if command -v git >/dev/null 2>&1 && [ -d "$PROJECT_DIR/.git" ]; then
-        say "забираю обновления…"
-        git -C "$PROJECT_DIR" pull --ff-only || warn "git pull не удался, обновляю только зависимости"
-    fi
-    "$PY" -m pip install --quiet -r "$PROJECT_DIR/requirements.txt" && ok "зависимости обновлены"
-    do_stop
-    do_start
+    exec bash "$PROJECT_DIR/update.sh" "$@"
 }
 
 usage() {
@@ -300,7 +286,7 @@ usage() {
     ui_cmd "./manage.sh restart" "перезапустить"
     ui_cmd "./manage.sh status" "состояние и статистика"
     ui_cmd "./manage.sh logs" "живой лог, Ctrl+C — выйти"
-    ui_cmd "./manage.sh update" "обновить код и перезапустить"
+    ui_cmd "./manage.sh update" "обновить бота (то же, что ./update.sh)"
     ui_blank
 }
 
@@ -310,7 +296,7 @@ case "${1:-status}" in
     restart)    do_stop; do_start ;;
     status)     do_status ;;
     logs)       do_logs ;;
-    update)     do_update ;;
+    update)     shift || true; do_update "$@" ;;
     is-running) is_running ;;
     help|-h|--help) usage ;;
     *)          usage; exit 1 ;;

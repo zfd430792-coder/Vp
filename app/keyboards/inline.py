@@ -503,7 +503,8 @@ def admin_menu(
     builder.button(text="⚙️ Настройки бота", callback_data=AdminCB(action="cfg"))
     builder.button(text="👮 Команда", callback_data=AdminCB(action="staff"))
     builder.button(text="📜 Журнал действий", callback_data=AdminCB(action="log"))
-    builder.adjust(1, 1, 1, 1, 1, 1, 2, 2, 1)
+    builder.button(text="🔄 Обновление бота", callback_data=AdminCB(action="upd"))
+    builder.adjust(1, 1, 1, 1, 1, 1, 2, 2, 2)
     return builder.as_markup()
 
 
@@ -704,6 +705,24 @@ def staff_list(members: Sequence[dict[str, Any]], *, can_manage: bool) -> Inline
             )
         )
     builder.row(InlineKeyboardButton(text="🏠 Меню", callback_data=AdminCB(action="menu").pack()))
+    return builder.as_markup()
+
+
+def update_menu(*, can_update: bool) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🔍 Проверить обновления", callback_data=AdminCB(action="upd_check"))
+    if can_update:
+        builder.button(text="⬇️ Обновить сейчас", callback_data=AdminCB(action="upd_start"))
+    builder.button(text="🏠 Меню", callback_data=AdminCB(action="menu"))
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def update_confirm() -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Да, обновить и перезапустить", callback_data=AdminCB(action="upd_go"))
+    builder.button(text="⬅️ Отмена", callback_data=AdminCB(action="upd"))
+    builder.adjust(1)
     return builder.as_markup()
 
 

@@ -13,6 +13,7 @@ from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 
 from app import texts, views
 from app.callbacks import AdminCB
+from app.config import BASE_DIR
 from app.constants import (
     DAY,
     DEFAULT_SETTINGS,
@@ -28,7 +29,7 @@ from app.constants import (
 from app.db import Database
 from app.filters import IsStaff
 from app.keyboards import inline
-from app.services import antifraud, moderation, notify, render, stats, verification
+from app.services import antifraud, moderation, notify, render, stats, updater, verification
 from app.services import chat as chat_service
 from app.services import likes as likes_service
 from app.services import profiles as profiles_service
@@ -1461,6 +1462,89 @@ async def admin_staff_del(
 @router.message(Admin.staff_add)
 async def admin_expects_text(message: Message) -> None:
     await message.answer("Здесь нужен текст. Отменить — /cancel")
+
+
+# --------------------------------------------------------------------------- обновление
+
+
+def _update_text(info: dict[str, Any]) -> str:
+    branch = f"Ветка: <code>{esc(info['branch'])}</code>\n" if info.get("branch") else ""
+    return texts.UPDATE_INFO.format(
+        commit=esc(info.get("commit") or "?"),
+        branch=branch,
+        date=esc(info.get("date") or "—"),
+        subject=esc(shorten(info.get("subject") or "—", 120)),
+    )
+
+
+@router.callback_query(AdminCB.filter(F.action == "upd"))
+async def admin_update(query: CallbackQuery, user: dict[str, Any]) -> None:
+    await query.answer()
+    if not updater.available(BASE_DIR):
+        await _show(query, texts.UPDATE_NO_GIT, inline.admin_back())
+        return
+    info = await updater.version(BASE_DIR)
+    can_update = int(user.get("role") or 0) >= ROLE_OWNER
+    await _show(query, _update_text(info), inline.update_menu(can_update=can_update))
+
+
+@router.callback_query(AdminCB.filter(F.action == "upd_check"))
+async def admin_update_check(query: CallbackQuery, user: dict[str, Any]) -> None:
+    if not updater.available(BASE_DIR):
+        await query.answer()
+        await _show(query, texts.UPDATE_NO_GIT, inline.admin_back())
+        return
+
+    await query.answer("Смотрю, что нового…")
+    result = await updater.check(BASE_DIR)
+    can_update = int(user.get("role") or 0) >= ROLE_OWNER
+
+    if not result.get("ok"):
+        text = texts.UPDATE_CHECK_FAILED.format(reason=esc(str(result.get("reason") or "")))
+    elif int(result.get("behind") or 0) == 0:
+        text = texts.UPDATE_LATEST
+    else:
+        text = texts.UPDATE_AVAILABLE.format(
+            behind=result["behind"], latest=esc(shorten(str(result.get("latest") or ""), 120))
+        )
+
+    info = await updater.version(BASE_DIR)
+    await _show(
+        query,
+        f"{text}\n\n{_update_text(info)}",
+        inline.update_menu(can_update=can_update),
+    )
+
+
+@router.callback_query(AdminCB.filter(F.action == "upd_start"))
+async def admin_update_confirm(query: CallbackQuery, user: dict[str, Any]) -> None:
+    if int(user.get("role") or 0) < ROLE_OWNER:
+        await query.answer("Обновлять бота может только владелец", show_alert=True)
+        return
+    await query.answer()
+    await _show(query, texts.UPDATE_CONFIRM, inline.update_confirm())
+
+
+@router.callback_query(AdminCB.filter(F.action == "upd_go"))
+async def admin_update_run(
+    query: CallbackQuery, db: Database, user: dict[str, Any]
+) -> None:
+    if int(user.get("role") or 0) < ROLE_OWNER:
+        await query.answer("Обновлять бота может только владелец", show_alert=True)
+        return
+    if not updater.available(BASE_DIR):
+        await query.answer()
+        await _show(query, texts.UPDATE_NO_GIT, inline.admin_back())
+        return
+
+    await moderation.log_action(db, int(user["id"]), "update_started")
+    if not updater.start(BASE_DIR):
+        await query.answer()
+        await _show(query, texts.UPDATE_START_FAILED, inline.admin_back())
+        return
+
+    await query.answer("Запустил обновление")
+    await _show(query, texts.UPDATE_STARTED)
 
 
 # --------------------------------------------------------------------------- рассылка

@@ -56,3 +56,17 @@ ui_sub()  { printf '       %s%s%s\n' "$UI_D" "$1" "$UI_R"; }
 
 # Строка вида «команда — описание» с ровными столбцами
 ui_cmd() { printf '       %s%-22s%s %s%s%s\n' "$UI_B" "$1" "$UI_R" "$UI_D" "$2" "$UI_R"; }
+
+UI_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Обрезка длинных строк по символам и удаление пустых.
+# Через Python, потому что cut -c и awk substr местами считают байты и рвут кириллицу.
+ui_trim() {
+    local width="${1:-66}"
+    local python="$UI_DIR/../.venv/bin/python"
+    if [ -x "$python" ] && [ -f "$UI_DIR/trim.py" ]; then
+        "$python" "$UI_DIR/trim.py" "$width"
+    else
+        cat
+    fi
+}
