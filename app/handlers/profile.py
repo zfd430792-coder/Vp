@@ -295,6 +295,13 @@ async def photo_received(
 ) -> None:
     user_id = int(user["id"])
     best = message.photo[-1]
+    if await profiles_service.is_photo_blocked(db, best.file_unique_id):
+        await antifraud.log_event(db, user_id, "banned_content", meta={"kind": "photo"})
+        await message.answer(
+            "⚠️ Это фото заблокировано модерацией и больше не принимается. "
+            "Пришли, пожалуйста, другой снимок."
+        )
+        return
     added = await profiles_service.add_photo(db, user_id, best.file_id, best.file_unique_id)
     if not added:
         await message.answer(f"Больше {MAX_PHOTOS} фото нельзя.")

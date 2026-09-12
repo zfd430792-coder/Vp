@@ -73,6 +73,10 @@ SETTING_TITLES = {
     "trust_for_bonus": "⭐️ Доверие для надбавки к лимиту",
     "verification_enabled": "✅ Верификация анкет (1/0)",
     "fresh_profile_boost_days": "🌱 Дней приоритета новым анкетам",
+    "nudge_enabled": "💌 Напоминания о лайках (1/0)",
+    "nudge_after_days": "😴 Дней молчания до напоминания",
+    "nudge_every_days": "🔁 Не чаще одного раза в дней",
+    "nudge_batch": "📦 Напоминаний за проход",
 }
 
 
@@ -146,6 +150,7 @@ async def _user_card(db: Database, target_id: int) -> tuple[str, Any] | None:
         banned=users_service.is_banned(user or {}),
         shadowed=users_service.is_shadowed(user or {}),
         queue_size=queue_size,
+        photos_blocked=await antifraud.has_banned_photos(db, target_id),
     )
     return text, markup
 
@@ -255,6 +260,7 @@ async def admin_stats(query: CallbackQuery, db: Database) -> None:
         f"Решено за неделю: {data['reports_resolved_week']}",
         f"Апелляций открыто: {data['appeals_open']}",
         f"Блокировок: {data['bans_active']} · ограничений охвата: {data['shadow_active']}",
+        f"Подтверждённых анкет: {data['verified']} · в стоп-листе: {await antifraud.stoplist_size(db)}",
     ]
     if sources:
         lines.append("")
@@ -901,6 +907,63 @@ async def admin_wipe_photos(
         "Загрузи свои фотографии в разделе «Моя анкета», и она вернётся в поиск.",
     )
     await query.answer("Фото удалены")
+    card = await _user_card(db, target_id)
+    if card:
+        await _show(query, card[0], card[1])
+
+
+@router.callback_query(AdminCB.filter(F.action == "ban_photos"))
+async def admin_ban_photos(
+    query: CallbackQuery,
+    callback_data: AdminCB,
+    bot: Bot,
+    db: Database,
+    user: dict[str, Any],
+) -> None:
+    """Стоп-лист по хэшу файла: такие снимки не пройдут ни у кого."""
+    target_id = callback_data.target
+    added = await antifraud.ban_user_photos(
+        db, target_id, "решение модератора", int(user["id"])
+    )
+    if not added:
+        await query.answer("У пользователя нет фотографий", show_alert=True)
+        return
+
+    await profiles_service.clear_photos(db, target_id)
+    await profiles_service.mark_complete(db, target_id)
+    await profiles_service.set_moderation(db, target_id, MOD_HOLD, "фото в стоп-листе")
+    await moderation.log_action(
+        db, int(user["id"]), "photos_blacklisted", target_id=target_id, details={"hashes": added}
+    )
+    await notify.send_message(
+        bot,
+        db,
+        target_id,
+        "🗑 <b>Фотографии удалены модератором</b>\n\n"
+        "Эти снимки нарушают правила и больше не принимаются — ни здесь, ни на другом "
+        "аккаунте. Загрузи свои фотографии, и анкета вернётся в поиск.",
+        reply_markup=inline.appeal_button(),
+    )
+    await query.answer(f"В стоп-лист добавлено хэшей: {added}")
+    card = await _user_card(db, target_id)
+    if card:
+        await _show(query, card[0], card[1])
+
+
+@router.callback_query(AdminCB.filter(F.action == "unban_photos"))
+async def admin_unban_photos(
+    query: CallbackQuery, callback_data: AdminCB, db: Database, user: dict[str, Any]
+) -> None:
+    target_id = callback_data.target
+    removed = await antifraud.unban_user_photos(db, target_id)
+    await moderation.log_action(
+        db,
+        int(user["id"]),
+        "photos_unblacklisted",
+        target_id=target_id,
+        details={"hashes": removed},
+    )
+    await query.answer(f"Убрано из стоп-листа: {removed}")
     card = await _user_card(db, target_id)
     if card:
         await _show(query, card[0], card[1])

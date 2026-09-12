@@ -232,6 +232,11 @@ MIGRATIONS: list[list[str]] = [
         """,
         "CREATE INDEX IF NOT EXISTS idx_profile_stats_day ON profile_stats(day)",
     ],
+    # --- версия 3: стоп-лист помнит, чей это контент ------------------------------
+    [
+        "ALTER TABLE banned_content ADD COLUMN added_for INTEGER",
+        "CREATE INDEX IF NOT EXISTS idx_banned_for ON banned_content(added_for, kind)",
+    ],
 ]
 
 

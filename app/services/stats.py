@@ -60,6 +60,10 @@ async def overview(db: Database) -> dict[str, Any]:
             "SELECT COUNT(*) FROM users WHERE shadow_level > 0 AND shadow_until > ?", (moment,)
         ),
         "bot_blocked": await count("SELECT COUNT(*) FROM users WHERE bot_blocked = 1"),
+        "verified": await count("SELECT COUNT(*) FROM users WHERE verified = 1"),
+        "verify_pending": await count(
+            "SELECT COUNT(*) FROM users WHERE verify_status = 'pending'"
+        ),
         "registrations_hour": await count(
             "SELECT COUNT(*) FROM users WHERE created_at >= ?", (moment - 3600,)
         ),

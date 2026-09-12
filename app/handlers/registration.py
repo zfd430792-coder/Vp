@@ -202,14 +202,22 @@ async def step_bio(message: Message, state: FSMContext) -> None:
 
 
 @router.message(Reg.photos, F.photo)
-async def step_photo(message: Message, state: FSMContext) -> None:
+async def step_photo(message: Message, state: FSMContext, db: Database) -> None:
+    best_photo = message.photo[-1]
+    if await profiles_service.is_photo_blocked(db, best_photo.file_unique_id):
+        await message.answer(
+            "⚠️ Это фото заблокировано модерацией и не подходит для анкеты. "
+            "Пришли, пожалуйста, другой снимок."
+        )
+        return
+
     data = await state.get_data()
     photos: list[dict[str, str]] = list(data.get("reg_photos") or [])
     if len(photos) >= MAX_PHOTOS:
         await message.answer(f"Больше {MAX_PHOTOS} фото не нужно. Нажми «Готово» ниже 👇")
         return
 
-    best = message.photo[-1]
+    best = best_photo
     if any(item["unique"] == best.file_unique_id for item in photos):
         await message.answer("Это фото уже добавлено. Пришли другое или нажми «Готово».")
         return

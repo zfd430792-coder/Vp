@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import itertools
 from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from aiogram import Bot, Dispatcher
@@ -38,6 +38,7 @@ class MockSession(BaseSession):
     def __init__(self) -> None:
         super().__init__()
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.documents: list[tuple[str, str]] = []
         self._ids = itertools.count(1000)
 
     async def close(self) -> None:  # pragma: no cover - заглушка
@@ -58,6 +59,16 @@ class MockSession(BaseSession):
         if isinstance(chat_id, str):
             chat_id = 0
 
+        if name == "SendDocument":
+            document = payload.get("document")
+            data = getattr(document, "data", None)
+            self.documents.append(
+                (
+                    getattr(document, "filename", "file"),
+                    data.decode("utf-8", "replace") if isinstance(data, bytes) else "",
+                )
+            )
+            return self._message(int(chat_id), payload.get("caption"))
         if name in {"SendMessage", "SendPhoto", "SendVideo", "SendVoice", "SendVideoNote",
                     "SendAnimation", "EditMessageText", "EditMessageCaption"}:
             return self._message(int(chat_id), payload.get("text") or payload.get("caption"))
@@ -74,7 +85,7 @@ class MockSession(BaseSession):
     def _message(self, chat_id: int, text: str | None) -> Message:
         return Message(
             message_id=next(self._ids),
-            date=datetime.now(timezone.utc),
+            date=datetime.now(UTC),
             chat=Chat(id=chat_id, type="private"),
             from_user=BOT_USER,
             text=text,
@@ -142,6 +153,7 @@ class MockSession(BaseSession):
 
     def clear(self) -> None:
         self.calls.clear()
+        self.documents.clear()
 
 
 class Harness:
@@ -178,7 +190,7 @@ class Harness:
     ) -> MockSession:
         message = Message(
             message_id=next(self._message_id),
-            date=datetime.now(timezone.utc),
+            date=datetime.now(UTC),
             chat=Chat(id=user_id, type="private"),
             from_user=self._user(user_id),
             text=None if photo else text,
@@ -197,7 +209,7 @@ class Harness:
     async def click(self, user_id: int, data: str, *, message_text: str = "карточка") -> MockSession:
         message = Message(
             message_id=next(self._message_id),
-            date=datetime.now(timezone.utc),
+            date=datetime.now(UTC),
             chat=Chat(id=user_id, type="private"),
             from_user=BOT_USER,
             text=message_text,

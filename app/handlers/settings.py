@@ -6,7 +6,7 @@ from typing import Any
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
 
 from app import texts, views
 from app.callbacks import SettingsCB
@@ -15,7 +15,7 @@ from app.constants import MAX_AGE, MIN_AGE
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline
-from app.services import moderation, notify
+from app.services import export, moderation, notify
 from app.services import profiles as profiles_service
 from app.services import users as users_service
 from app.states import Appeal, Edit
@@ -273,6 +273,22 @@ async def save_appeal(
 @router.message(Appeal.text)
 async def appeal_wrong_type(message: Message) -> None:
     await message.answer("Опиши ситуацию текстом, пожалуйста.")
+
+
+@router.callback_query(SettingsCB.filter(F.action == "export"))
+async def export_data(query: CallbackQuery, db: Database, user: dict[str, Any]) -> None:
+    """Отдаёт человеку всё, что бот о нём хранит, одним файлом."""
+    await query.answer()
+    if query.message is None:
+        return
+    payload = await export.to_json(db, int(user["id"]))
+    if payload is None:
+        await query.message.answer(texts.EXPORT_EMPTY)
+        return
+    await query.message.answer_document(
+        BufferedInputFile(payload, filename=f"my-data-{user['id']}.json"),
+        caption=texts.EXPORT_READY,
+    )
 
 
 # --------------------------------------------------------------------------- удаление данных

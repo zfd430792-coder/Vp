@@ -289,7 +289,7 @@ def profile_menu(
         builder.button(text="⏸ Скрыть из поиска", callback_data=ProfileCB(action="pause"))
     else:
         builder.button(text="▶️ Вернуть в поиск", callback_data=ProfileCB(action="resume"))
-    builder.adjust(2, 2, 2, 2, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 1, 1)
     return builder.as_markup()
 
 
@@ -345,6 +345,7 @@ def settings_menu() -> InlineKeyboardMarkup:
     builder.button(text="🔔 Уведомления", callback_data=SettingsCB(action="notify"))
     builder.button(text="🛡 Безопасность", callback_data=SettingsCB(action="safety"))
     builder.button(text="📨 Написать модератору", callback_data=SettingsCB(action="appeal"))
+    builder.button(text="📄 Скачать мои данные", callback_data=SettingsCB(action="export"))
     builder.button(text="🗑 Удалить анкету", callback_data=SettingsCB(action="delete"))
     builder.adjust(1)
     return builder.as_markup()
@@ -535,7 +536,12 @@ def shadow_menu(target_id: int, *, back: str = "user", page: int = 0) -> InlineK
 
 
 def user_actions(
-    card: dict[str, Any], *, banned: bool, shadowed: bool, queue_size: int = 0
+    card: dict[str, Any],
+    *,
+    banned: bool,
+    shadowed: bool,
+    queue_size: int = 0,
+    photos_blocked: bool = False,
 ) -> InlineKeyboardMarkup:
     target_id = int(card.get("user_id") or card.get("id"))
     builder = InlineKeyboardBuilder()
@@ -562,12 +568,22 @@ def user_actions(
         text="✅ Снять флаги", callback_data=AdminCB(action="clear_flags", target=target_id)
     )
     builder.button(text="🗑 Удалить фото", callback_data=AdminCB(action="wipe_photos", target=target_id))
+    if photos_blocked:
+        builder.button(
+            text="♻️ Убрать фото из стоп-листа",
+            callback_data=AdminCB(action="unban_photos", target=target_id),
+        )
+    else:
+        builder.button(
+            text="🚫 Фото в стоп-лист",
+            callback_data=AdminCB(action="ban_photos", target=target_id),
+        )
     if queue_size:
         builder.button(
             text=f"🚩 К жалобам ({queue_size})", callback_data=AdminCB(action="reports")
         )
     builder.button(text="🏠 Меню", callback_data=AdminCB(action="menu"))
-    builder.adjust(2, 2, 2, 2, 1, 1)
+    builder.adjust(2, 2, 2, 2, 1, 1, 1)
     return builder.as_markup()
 
 

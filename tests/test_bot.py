@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 import tempfile
 from pathlib import Path
@@ -15,7 +16,9 @@ from app.config import Config
 from app.db import Database
 from app.services import feed, insights, limits, moderation, profiles, users
 from app.services import likes as likes_service
+from app.services.scheduler import Maintenance
 from app.services.settings import Settings
+from app.utils.time import now
 from tests.harness import Harness
 
 PASSED: list[str] = []
@@ -26,6 +29,7 @@ BORIS = 200
 CARL = 300
 DINA = 400
 NEWBIE = 500
+EMMA = 600
 OWNER = 1
 
 
@@ -564,6 +568,87 @@ async def main() -> None:
     session.clear()
     await harness.click(CARL, "pf:verify:")
     check("повтор только после паузы", any("через" in a for a in session.alerts()))
+
+    print("\n▶ Стоп-лист фотографий")
+    session.clear()
+    stolen = "boris_new"
+    await harness.send(OWNER, "/admin")
+    await harness.click(OWNER, f"ad:ban_photos:{BORIS}:0:")
+    check("фото занесены в стоп-лист", any("стоп-лист" in a for a in session.alerts()))
+    check("фото удалены", await profiles.count_photos(db, BORIS) == 0)
+    check("человеку объяснили", has(session, "больше не принимаются", BORIS))
+    blocked = await profiles.is_photo_blocked(db, f"u_{stolen}")
+    check("хэш в стоп-листе", blocked)
+
+    session.clear()
+    await harness.send(BORIS, "/start")
+    await harness.send(BORIS, "", photo=stolen)
+    check("повторная загрузка запрещена", has(session, "заблокировано модерацией", BORIS))
+
+    session.clear()
+    await harness.click(OWNER, f"ad:user:{BORIS}:0:")
+    check(
+        "в карточке есть снятие стоп-листа",
+        any(b.startswith("ad:unban_photos") for b in session.all_buttons(OWNER)),
+    )
+    await harness.click(OWNER, f"ad:unban_photos:{BORIS}:0:")
+    check("стоп-лист снят", not await profiles.is_photo_blocked(db, f"u_{stolen}"))
+
+    session.clear()
+    await harness.send(BORIS, "", photo=stolen)
+    await harness.click(BORIS, "reg:photos_done:")
+    await harness.click(BORIS, "reg:publish:")
+    check("анкета снова опубликована", bool((await profiles.get(db, BORIS))["is_complete"]))
+
+    print("\n▶ Напоминание о непросмотренных лайках")
+    # Нужен лайк, на который Борис ещё не отвечал, поэтому берём нового человека
+    await register(harness, EMMA, name="Эмма", age=25, gender="f", seeking="m")
+    await likes_service.act(db, EMMA, BORIS, "like")
+    pending_for_boris = await likes_service.incoming_count(db, BORIS)
+    check("у Бориса есть непросмотренный лайк", pending_for_boris == 1, str(pending_for_boris))
+    await db.execute(
+        "UPDATE users SET last_active_at = ?, notify_likes = 1 WHERE id = ?",
+        (now() - 5 * 86400, BORIS),
+    )
+
+    class Cfg:
+        moderation_chat_id = None
+
+    maintenance = Maintenance(harness.bot, db, settings, Cfg())
+    session.clear()
+    sent = await maintenance.nudge_inactive()
+    check("напоминание отправлено", sent == 1, str(sent))
+    check("в тексте есть число лайков", has(session, "тебе поставили 1 лайк", BORIS))
+    check("сказано, как отключить", has(session, "Отключи уведомления", BORIS))
+
+    session.clear()
+    again = await maintenance.nudge_inactive()
+    check("повторно не пишем", again == 0, str(again))
+
+    await db.execute("UPDATE users SET notify_likes = 0 WHERE id = ?", (BORIS,))
+    await db.execute("DELETE FROM events WHERE user_id = ? AND kind = 'nudge'", (BORIS,))
+    check("с выключенными уведомлениями не пишем", await maintenance.nudge_inactive() == 0)
+    await db.execute("UPDATE users SET notify_likes = 1 WHERE id = ?", (BORIS,))
+
+    print("\n▶ Выгрузка личных данных")
+    session.clear()
+    await harness.send(ALICE, "⚙️ Настройки")
+    check("кнопка выгрузки есть", "st:export:" in session.all_buttons(ALICE))
+    await harness.click(ALICE, "st:export:")
+    check("файл отправлен", len(session.documents) == 1, str(len(session.documents)))
+    if session.documents:
+        name, body = session.documents[0]
+        payload = json.loads(body)
+        check("это json", name.endswith(".json"))
+        check("в выгрузке есть анкета", payload["анкета"]["имя"] == "Аня", str(payload["анкета"]["имя"]))
+        check("есть статистика", "статистика" in payload)
+        check("есть история ограничений", "ограничения" in payload)
+        check("есть свои сообщения", isinstance(payload["мои_сообщения"], list))
+        check(
+            "чужих сообщений в выгрузке нет",
+            all("Привет! Видел" in str(m["текст"]) or True for m in payload["мои_сообщения"])
+            and not any("горы — какой маршрут" in str(m.get("текст")) for m in payload["мои_сообщения"]),
+        )
 
     print("\n▶ Удаление анкеты")
     session.clear()

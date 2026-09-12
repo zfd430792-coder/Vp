@@ -188,16 +188,70 @@ async def is_banned_content(db: Database, digest: str) -> dict[str, Any] | None:
 
 
 async def ban_content(
-    db: Database, digest: str, kind: str, reason: str, admin_id: int
+    db: Database,
+    digest: str,
+    kind: str,
+    reason: str,
+    admin_id: int,
+    *,
+    added_for: int | None = None,
 ) -> None:
+    """Заносит хэш контента в стоп-лист.
+
+    ``added_for`` — чей это был контент: по нему запрет можно снять даже после того,
+    как сами фотографии удалены из анкеты.
+    """
     await db.execute(
         """
-        INSERT INTO banned_content (hash, kind, reason, added_by, created_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(hash) DO UPDATE SET reason = excluded.reason, added_by = excluded.added_by
+        INSERT INTO banned_content (hash, kind, reason, added_by, added_for, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(hash) DO UPDATE SET
+            reason = excluded.reason,
+            added_by = excluded.added_by,
+            added_for = COALESCE(excluded.added_for, banned_content.added_for)
         """,
-        (digest, kind, reason, admin_id, now()),
+        (digest, kind, reason, admin_id, added_for, now()),
     )
+
+
+async def ban_user_photos(db: Database, user_id: int, reason: str, admin_id: int) -> int:
+    """Заносит все фото анкеты в стоп-лист. Возвращает число добавленных хэшей."""
+    rows = await db.fetchall(
+        "SELECT DISTINCT file_unique_id FROM photos WHERE user_id = ?", (user_id,)
+    )
+    for row in rows:
+        await ban_content(
+            db, str(row["file_unique_id"]), "photo", reason, admin_id, added_for=user_id
+        )
+    return len(rows)
+
+
+async def unban_user_photos(db: Database, user_id: int) -> int:
+    """Снимает запрет с фотографий этого аккаунта, даже если они уже удалены."""
+    return await db.modify(
+        "DELETE FROM banned_content WHERE kind = 'photo' AND ("
+        "added_for = ? OR hash IN (SELECT file_unique_id FROM photos WHERE user_id = ?))",
+        (user_id, user_id),
+    )
+
+
+async def has_banned_photos(db: Database, user_id: int) -> bool:
+    row = await db.fetchone(
+        """
+        SELECT 1 FROM banned_content
+         WHERE kind = 'photo' AND (
+               added_for = ?
+            OR hash IN (SELECT file_unique_id FROM photos WHERE user_id = ?)
+         )
+         LIMIT 1
+        """,
+        (user_id, user_id),
+    )
+    return row is not None
+
+
+async def stoplist_size(db: Database) -> int:
+    return int(await db.fetchval("SELECT COUNT(*) FROM banned_content", (), 0))
 
 
 async def screen_profile(

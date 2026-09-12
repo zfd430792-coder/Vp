@@ -105,6 +105,14 @@ async def count_photos(db: Database, user_id: int) -> int:
     return int(await db.fetchval("SELECT COUNT(*) FROM photos WHERE user_id = ?", (user_id,), 0))
 
 
+async def is_photo_blocked(db: Database, file_unique_id: str) -> bool:
+    """Фото из стоп-листа модерации нельзя загружать повторно."""
+    row = await db.fetchone(
+        "SELECT 1 FROM banned_content WHERE hash = ? AND kind = 'photo'", (file_unique_id,)
+    )
+    return row is not None
+
+
 async def add_photo(
     db: Database, user_id: int, file_id: str, file_unique_id: str, kind: str = "photo"
 ) -> bool:
