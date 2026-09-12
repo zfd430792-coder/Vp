@@ -177,18 +177,17 @@ async def cmd_start(
         )
         return
 
-    # Анкеты нет — приветствие, затем предупреждение с кнопкой по таймеру
+    # Анкеты нет — приветствие, затем предупреждение с кнопкой по таймеру.
+    # Предупреждение показываем всегда, а не только новичкам: принятые когда-то
+    # правила при незаконченной анкете не значат, что человек их прочитал,
+    # а памятку про мошенников и шантаж лишний раз увидеть только полезно.
     await message.answer(texts.WELCOME, reply_markup=reply.remove)
 
     if not settings.get_bool("registration_open", True):
         await message.answer(texts.REG_CLOSED)
         return
 
-    if not user.get("rules_accepted_at"):
-        await show_warning(bot, db, settings, message.chat.id, state)
-        return
-
-    await start_registration(message, state, db, settings, user)
+    await show_warning(bot, db, settings, message.chat.id, state)
 
 
 async def _remember_source(db: Database, user: dict[str, Any], payload: str) -> None:

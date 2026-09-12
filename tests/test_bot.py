@@ -630,6 +630,8 @@ async def main() -> None:
 
     session.clear()
     await harness.send(BORIS, "/start")
+    check("перед анкетой снова показали памятку", has(session, "Прочитай перед началом", BORIS))
+    await harness.click(BORIS, "reg:rules_ok:")
     check("бот просит только фото", has(session, "не хватает фотографии", BORIS))
     check("заново имя не спрашивают", not has(session, "Шаг 1/7", BORIS))
     await harness.send(BORIS, "", photo="boris_new")
@@ -787,6 +789,7 @@ async def main() -> None:
 
     session.clear()
     await harness.send(BORIS, "/start")
+    await harness.click(BORIS, "reg:rules_ok:")
     await harness.send(BORIS, "", photo=stolen)
     check("повторная загрузка запрещена", has(session, "заблокировано модерацией", BORIS))
 

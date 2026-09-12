@@ -45,6 +45,52 @@ async def _git(project_dir: Path, *args: str, timeout: int = 10) -> str | None:
     return stdout.decode("utf-8", "replace").strip()
 
 
+def read_commit(project_dir: Path) -> str:
+    """Короткий хэш текущего коммита, прочитанный прямо из файлов .git.
+
+    Без вызова git: нужно на старте бота, где лишний процесс ни к чему, да и
+    git может быть не установлен.
+    """
+    head = project_dir / ".git" / "HEAD"
+    try:
+        text = head.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+    if not text.startswith("ref: "):
+        return text[:7]
+
+    name = text[5:].strip()
+    ref = project_dir / ".git" / name
+    try:
+        return ref.read_text(encoding="utf-8").strip()[:7]
+    except OSError:
+        pass
+
+    packed = project_dir / ".git" / "packed-refs"
+    try:
+        for line in packed.read_text(encoding="utf-8").splitlines():
+            if line.endswith(f" {name}"):
+                return line.split()[0][:7]
+    except OSError:
+        pass
+    return ""
+
+
+def mark_running(project_dir: Path, state_dir: Path) -> None:
+    """Записывает версию, на которой бот сейчас запущен.
+
+    По этой отметке update.sh понимает, что код обновили, а процесс остался
+    прежним: после ручного git pull перезапуск нужен, даже если тянуть нечего.
+    """
+    commit = read_commit(project_dir) or "unknown"
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "running_version").write_text(commit + "\n", encoding="utf-8")
+    except OSError as error:
+        log.debug("не удалось записать отметку версии: %s", error)
+
+
 def available(project_dir: Path) -> bool:
     """Можно ли обновляться автоматически: нужен git и сам скрипт."""
     return (project_dir / ".git").exists() and (project_dir / "update.sh").exists()

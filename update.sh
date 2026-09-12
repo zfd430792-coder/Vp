@@ -152,12 +152,49 @@ fi
 
 if [ "$OLD_COMMIT" = "$REMOTE_COMMIT" ]; then
     ui_ok "у вас уже последняя версия"
+
+    # Код мог обновить руками через git pull — тогда тянуть нечего, но запущенный
+    # процесс всё ещё старый. Сверяем отметку, которую бот пишет при старте.
+    RUNNING_FILE="$(dirname "$DB_FULL")/running_version"
+    RUNNING="$(cat "$RUNNING_FILE" 2>/dev/null | tr -d ' \r\n')"
+    CURRENT="${OLD_COMMIT:0:7}"
+    NEED_RESTART=0
+    if ! "$PROJECT_DIR/manage.sh" is-running; then
+        ui_warn "бот сейчас не работает — запускаю"
+        NEED_RESTART=1
+    elif [ -z "$RUNNING" ]; then
+        ui_note "не знаю, на какой версии запущен бот — перезапускаю на всякий случай"
+        NEED_RESTART=1
+    elif [ "$RUNNING" != "$CURRENT" ]; then
+        ui_warn "запущен код версии $RUNNING, а на диске уже $CURRENT"
+        ui_note "похоже, код обновляли вручную — перезапускаю"
+        NEED_RESTART=1
+    else
+        ui_ok "бот работает на этой же версии, перезапуск не нужен"
+    fi
+
+    if [ "$NEED_RESTART" -eq 1 ]; then
+        "$PROJECT_DIR/manage.sh" restart --quiet || true
+        if "$PROJECT_DIR/manage.sh" is-healthy 8; then
+            ui_ok "бот перезапущен на версии $CURRENT"
+            notify_owner "🔄 <b>Бот перезапущен</b>
+Код был обновлён раньше, процесс работал на старой версии.
+Сейчас работает <code>$CURRENT</code>."
+        else
+            ui_fail "бот не поднялся после перезапуска"
+            ui_note "посмотрите: $SELF logs"
+        fi
+    fi
     ui_blank
     ui_rule
     ui_blank
-    ui_head "✅  Обновлять нечего"
+    ui_head "✅  Всё на свежей версии"
     ui_blank
-    ui_text "Бот уже на свежей версии, перезапуск не нужен."
+    if [ "$NEED_RESTART" -eq 1 ]; then
+        ui_text "Код был актуальный, но процесс работал на старом — перезапустил."
+    else
+        ui_text "Бот уже на свежей версии, обновлять и перезапускать нечего."
+    fi
     ui_blank
     ui_text "Управление"
     ui_cmd "$SELF" "состояние и версия"

@@ -13,10 +13,11 @@ from aiogram.exceptions import TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, ErrorEvent
 
-from app.config import ConfigError, load_config
+from app.config import BASE_DIR, ConfigError, load_config
 from app.db import Database
 from app.handlers import build_router
 from app.middlewares import ThrottlingMiddleware, UserMiddleware
+from app.services import updater
 from app.services import users as users_service
 from app.services.scheduler import Maintenance
 from app.services.settings import Settings
@@ -69,6 +70,9 @@ async def main() -> None:
     settings = Settings(db)
     await settings.load()
     await users_service.sync_owners(db, config.owner_ids)
+
+    # Отметка версии: по ней update.sh поймёт, что код новее запущенного процесса
+    updater.mark_running(BASE_DIR, config.db_path.parent)
 
     bot = Bot(
         token=config.token,
