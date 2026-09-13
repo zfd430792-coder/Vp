@@ -53,10 +53,10 @@ async def register(harness: Harness, user_id: int, *, name: str, age: int, gende
     await harness.send(user_id, "/start")
     await harness.click(user_id, "reg:begin:")
     await harness.click(user_id, "reg:rules_ok:")
-    await harness.send(user_id, name)
-    await harness.send(user_id, str(age))
     await harness.click(user_id, f"reg:gender:{gender}")
     await harness.click(user_id, f"reg:seeking:{seeking}")
+    await harness.send(user_id, str(age))
+    await harness.send(user_id, name)
     await harness.send(user_id, "Москва")
     await harness.click(user_id, "reg:interest:music")
     await harness.click(user_id, "reg:interest:travel")
@@ -99,8 +99,13 @@ async def main() -> None:
 
     print("\n▶ Предупреждение — только после нажатия кнопки")
     session.clear()
-    await harness.click(ALICE, "reg:begin:")
+    await harness.click(ALICE, "reg:begin:", message_text="👋 Приветствую тебя, @user100!")
     check("показано предупреждение", has(session, "Пара важных вещей", ALICE))
+    check(
+        "приветствие за собой убрано",
+        any("Приветствую тебя" in t for t in session.deleted_texts(ALICE)),
+        str(session.deleted_texts(ALICE))[:80],
+    )
     check("оформлено цитатами", session.texts(ALICE)[0].count("<blockquote>") >= 3)
     check("есть про деньги", has(session, "Денег здесь никто не просит", ALICE))
     check("есть про шантаж", has(session, "не плати", ALICE))
@@ -163,14 +168,24 @@ async def main() -> None:
     await harness.send(ALICE, "/start")
     check("приветствие показывается снова", has(session, "создан для знакомств", ALICE))
     await harness.click(ALICE, "reg:begin:")
-    await harness.click(ALICE, "reg:rules_ok:")
-    check("начался шаг с именем", has(session, "Шаг 1/7"))
+    await harness.click(ALICE, "reg:rules_ok:", message_text="⚠️ Пара важных вещей — прочитай")
+    check(
+        "предупреждение за собой убрано",
+        any("Пара важных вещей" in t for t in session.deleted_texts(ALICE)),
+        str(session.deleted_texts(ALICE))[:80],
+    )
+    check("анкета начинается с выбора пола", has(session, "1 из 8"))
+    check("и это кнопки, а не ввод", "reg:gender:f" in session.all_buttons(ALICE))
+    check("видно полоску прогресса", has(session, "▰▱▱▱▱▱▱▱"))
 
-    await harness.send(ALICE, "Аня123!!!")
-    check("некорректное имя отклонено", has(session, "только буквы"))
     session.clear()
-    await harness.send(ALICE, "Аня")
-    check("после имени спрашивают возраст", has(session, "Шаг 2/7"))
+    await harness.click(ALICE, "reg:gender:f")
+    check("дальше спрашивают, кого искать", has(session, "2 из 8"))
+    check("и это тоже кнопки", "reg:seeking:m" in session.all_buttons(ALICE))
+
+    session.clear()
+    await harness.click(ALICE, "reg:seeking:m")
+    check("после этого спрашивают возраст", has(session, "3 из 8"))
 
     session.clear()
     await harness.send(ALICE, "17")
@@ -180,17 +195,20 @@ async def main() -> None:
 
     session.clear()
     await harness.send(ALICE, "24")
-    check("после возраста спрашивают пол", has(session, "Шаг 3/7"))
-    await harness.click(ALICE, "reg:gender:f")
-    await harness.click(ALICE, "reg:seeking:m")
-    check("после пола спрашивают город", has(session, "Шаг 5/7"))
+    check("после возраста спрашивают имя", has(session, "4 из 8"))
+    await harness.send(ALICE, "Аня123!!!")
+    check("некорректное имя отклонено", has(session, "только буквы"))
+
+    session.clear()
+    await harness.send(ALICE, "Аня")
+    check("после имени спрашивают город", has(session, "5 из 8"))
 
     session.clear()
     await harness.send(ALICE, "Москва")
-    check("интересы предлагаются", has(session, "Шаг 6/7"))
+    check("интересы предлагаются", has(session, "6 из 8"))
     await harness.click(ALICE, "reg:interest:music")
     await harness.click(ALICE, "reg:interests_done:")
-    check("после интересов — описание", has(session, "Шаг 7/7"))
+    check("после интересов — описание", has(session, "7 из 8"))
 
     session.clear()
     await harness.send(ALICE, "Пишите мне в телеграм @anna_real, вот мой номер 89991234567")
@@ -198,7 +216,8 @@ async def main() -> None:
 
     session.clear()
     await harness.send(ALICE, "Люблю горы, кофе и долгие разговоры о кино.")
-    check("просят фотографии", has(session, "Последний шаг"))
+    check("просят фотографии", has(session, "8 из 8"))
+    check("полоска дошла до конца", has(session, "▰▰▰▰▰▰▰▰"))
 
     await harness.send(ALICE, "", photo="alice_1")
     session.clear()
@@ -229,7 +248,7 @@ async def main() -> None:
     # заново запускать анкету поверх готовой
     session.clear()
     await harness.click(ALICE, "reg:begin:")
-    check("старая кнопка не сбрасывает анкету", not has(session, "Шаг 1/7", ALICE))
+    check("старая кнопка не сбрасывает анкету", not has(session, "1 из 8", ALICE))
     check("вместо этого открылось меню", not has(session, "Пара важных вещей", ALICE))
     check("анкета цела", bool((await profiles.get(db, ALICE))["is_complete"]))
     menu_calls = [
@@ -523,10 +542,10 @@ async def main() -> None:
     await harness.send(GEO, "/start")
     await harness.click(GEO, "reg:begin:")
     await harness.click(GEO, "reg:rules_ok:")
-    await harness.send(GEO, "Гео")
-    await harness.send(GEO, "28")
     await harness.click(GEO, "reg:gender:m")
     await harness.click(GEO, "reg:seeking:f")
+    await harness.send(GEO, "28")
+    await harness.send(GEO, "Гео")
     check("на шаге города предлагают прислать место", has(session, "местоположению", GEO))
     location_button = [
         payload
@@ -550,7 +569,7 @@ async def main() -> None:
     session.clear()
     await harness.send(GEO, "мск")
     check("сокращение распознано как Москва", has(session, "Город: <b>Москва</b>", GEO))
-    check("после города спрашивают интересы", has(session, "Шаг 6/7", GEO))
+    check("после города спрашивают интересы", has(session, "6 из 8", GEO))
 
     session.clear()
     await harness.click(GEO, "reg:interests_done:")
@@ -668,7 +687,7 @@ async def main() -> None:
     check("перед анкетой снова показали памятку", has(session, "Пара важных вещей", BORIS))
     await harness.click(BORIS, "reg:rules_ok:")
     check("бот просит только фото", has(session, "не хватает фотографии", BORIS))
-    check("заново имя не спрашивают", not has(session, "Шаг 1/7", BORIS))
+    check("анкету не начинают сначала", not has(session, "1 из 8", BORIS))
     await harness.send(BORIS, "", photo="boris_new")
     session.clear()
     await harness.click(BORIS, "reg:photos_done:")
@@ -702,7 +721,7 @@ async def main() -> None:
 
     session.clear()
     await harness.click(NEWBIE, right)
-    check("верный ответ пропускает дальше", has(session, "Шаг 1/7", NEWBIE))
+    check("верный ответ пропускает дальше", has(session, "1 из 8", NEWBIE))
     check("капча отмечена пройденной", bool((await users.get(db, NEWBIE))["captcha_passed"]))
     await settings.set("reg_burst_limit", "12")
 

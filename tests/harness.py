@@ -40,6 +40,7 @@ class MockSession(BaseSession):
         super().__init__()
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.documents: list[tuple[str, str]] = []
+        self.sent_texts: dict[int, str] = {}
         self._ids = itertools.count(1000)
 
     async def close(self) -> None:  # pragma: no cover - заглушка
@@ -84,13 +85,28 @@ class MockSession(BaseSession):
         return True
 
     def _message(self, chat_id: int, text: str | None) -> Message:
+        message_id = next(self._ids)
+        # Запоминаем текст: по нему потом видно, какое именно сообщение бот удалил
+        self.sent_texts[message_id] = text or ""
         return Message(
-            message_id=next(self._ids),
+            message_id=message_id,
             date=datetime.now(timezone.utc),
             chat=Chat(id=chat_id, type="private"),
             from_user=BOT_USER,
             text=text,
         )
+
+    def deleted_texts(self, chat_id: int | None = None) -> list[str]:
+        """Тексты сообщений, которые бот удалил с момента clear()."""
+        found: list[str] = []
+        for name, payload in self.calls:
+            if name not in {"DeleteMessage", "DeleteMessages"}:
+                continue
+            if chat_id is not None and payload.get("chat_id") != chat_id:
+                continue
+            ids = payload.get("message_ids") or [payload.get("message_id")]
+            found.extend(self.sent_texts.get(int(mid), "") for mid in ids if mid)
+        return found
 
     # --- удобные выборки для проверок -----------------------------------------
     def texts(self, chat_id: int | None = None) -> list[str]:
@@ -244,6 +260,9 @@ class Harness:
             from_user=BOT_USER,
             text=message_text,
         )
+        # Сообщение под кнопкой тоже «отправлено ботом»: так проверки видят,
+        # какой именно текст бот потом удалил
+        self.session.sent_texts[message.message_id] = message_text
         query = CallbackQuery(
             id=str(next(self._update_id)),
             from_user=self._user(user_id),

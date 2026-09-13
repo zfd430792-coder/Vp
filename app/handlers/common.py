@@ -145,9 +145,12 @@ async def begin_profile(
     profile = await profiles_service.get(db, int(user["id"]))
     if profile and await resume(message, state, db, profile):
         return
-    await state.set_state(Reg.name)
+    # Первый вопрос — с кнопками: начинать анкету с нажатия приятнее, чем
+    # со строки ввода. Нижнюю клавиатуру снимаем отдельным сообщением: вместе
+    # с inline-кнопками Telegram её отправить не даёт.
+    await state.set_state(Reg.gender)
     await message.answer(texts.REG_INTRO, reply_markup=reply.remove)
-    await message.answer(texts.ASK_NAME)
+    await message.answer(texts.ASK_GENDER, reply_markup=inline.gender())
 
 
 @router.message(CommandStart())
@@ -247,15 +250,9 @@ async def begin_from_welcome(
         await ui.show_menu(bot, db, query.message.chat.id, user)
         return
 
-    # Убираем кнопку у приветствия, чтобы её не нажали второй раз
-    await notify.safe_call(
-        db,
-        query.message.chat.id,
-        bot.edit_message_reply_markup,
-        chat_id=query.message.chat.id,
-        message_id=query.message.message_id,
-        reply_markup=None,
-    )
+    # Приветствие своё дело сделало — убираем его, чтобы в переписке осталось
+    # только то, что сейчас нужно читать
+    await notify.delete_messages(bot, query.message.chat.id, [query.message.message_id])
     await show_warning(bot, db, settings, query.message.chat.id, state)
 
 
@@ -286,6 +283,7 @@ async def decline_rules(query: CallbackQuery) -> None:
 async def accept_rules(
     query: CallbackQuery,
     state: FSMContext,
+    bot: Bot,
     db: Database,
     settings: Settings,
     user: dict[str, Any],
@@ -313,9 +311,9 @@ async def accept_rules(
         await users_service.accept_rules(db, int(user["id"]))
         user["rules_accepted_at"] = now()
 
-    await query.message.edit_text(
-        texts.WARNING + "\n\n✅ <b>Правила приняты.</b>",
-    )
+    # Памятку прочитали — убираем и её: дальше человек заполняет анкету,
+    # и на экране должен остаться только текущий шаг
+    await notify.delete_messages(bot, query.message.chat.id, [query.message.message_id])
 
     if not settings.get_bool("registration_open", True):
         await query.message.answer(texts.REG_CLOSED)
@@ -323,7 +321,7 @@ async def accept_rules(
 
     profile = await profiles_service.get(db, int(user["id"]))
     if profile and profile.get("is_complete"):
-        await ui.show_menu(query.bot, db, query.message.chat.id, user)
+        await ui.show_menu(bot, db, query.message.chat.id, user)
         return
     await start_registration(query.message, state, db, settings, user)
 

@@ -43,7 +43,7 @@ def start_profile(*, resume: bool = False) -> InlineKeyboardMarkup:
 def warning_accept() -> InlineKeyboardMarkup:
     """Кнопки под предупреждением. Показываются не сразу — после паузы на чтение."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Мне есть 18, продолжаем", callback_data=RegCB(action="rules_ok"))
+    builder.button(text="✅ Принять и продолжить", callback_data=RegCB(action="rules_ok"))
     builder.button(text="🛡 Подробнее о безопасности", callback_data=RegCB(action="safety"))
     builder.adjust(1)
     return builder.as_markup()
@@ -51,7 +51,7 @@ def warning_accept() -> InlineKeyboardMarkup:
 
 def after_safety() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Мне есть 18, продолжаем", callback_data=RegCB(action="rules_ok"))
+    builder.button(text="✅ Принять и продолжить", callback_data=RegCB(action="rules_ok"))
     builder.button(text="⬅️ Назад", callback_data=RegCB(action="rules_back"))
     builder.adjust(1)
     return builder.as_markup()

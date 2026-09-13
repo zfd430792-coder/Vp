@@ -54,21 +54,26 @@ async def resume(
 
     Возвращает False, если продолжать нечего (анкета пустая).
     """
-    if not profile.get("name"):
+    if not any(profile.get(field) for field in ("gender", "seeking", "age", "name")):
         return False
 
     await preload(state, profile)
     photos = await profiles_service.count_photos(db, int(profile["user_id"]))
 
-    if not profile.get("age"):
-        await state.set_state(Reg.age)
-        await message.answer(texts.ASK_AGE)
-    elif not profile.get("gender"):
+    if not profile.get("gender"):
         await state.set_state(Reg.gender)
         await message.answer(texts.ASK_GENDER, reply_markup=inline.gender())
+    elif not profile.get("seeking"):
+        await state.set_state(Reg.seeking)
+        await message.answer(texts.ASK_SEEKING, reply_markup=inline.seeking())
+    elif not profile.get("age"):
+        await state.set_state(Reg.age)
+        await message.answer(texts.ASK_AGE)
+    elif not profile.get("name"):
+        await state.set_state(Reg.name)
+        await message.answer(texts.ASK_NAME)
     elif not profile.get("city"):
-        await state.set_state(Reg.city)
-        await message.answer(texts.ASK_CITY)
+        await ask_city(message, state)
     elif not photos:
         await state.set_state(Reg.photos)
         await state.update_data(reg_photos=[])
@@ -89,8 +94,7 @@ async def step_name(message: Message, state: FSMContext) -> None:
         await message.answer(f"⚠️ {error}")
         return
     await state.update_data(reg_name=name)
-    await state.set_state(Reg.age)
-    await message.answer(texts.ASK_AGE)
+    await ask_city(message, state)
 
 
 @router.message(Reg.age, F.text)
@@ -103,8 +107,8 @@ async def step_age(message: Message, state: FSMContext, db: Database, user: dict
             await antifraud.log_event(db, int(user["id"]), "underage_attempt", weight=0)
         return
     await state.update_data(reg_age=age)
-    await state.set_state(Reg.gender)
-    await message.answer(texts.ASK_GENDER, reply_markup=inline.gender())
+    await state.set_state(Reg.name)
+    await message.answer(texts.ASK_NAME)
 
 
 async def ask_city(message: Message, state: FSMContext) -> None:
@@ -130,10 +134,10 @@ async def step_seeking(query: CallbackQuery, callback_data: RegCB, state: FSMCon
         await query.answer()
         return
     await state.update_data(reg_seeking=callback_data.value)
+    await state.set_state(Reg.age)
     await query.answer()
     if query.message:
-        await query.message.edit_text("<b>Шаг 5/7 · Город</b>")
-        await ask_city(query.message, state)
+        await query.message.edit_text(texts.ASK_AGE)
 
 
 async def ask_interests(message: Message, state: FSMContext) -> None:
@@ -251,7 +255,8 @@ async def step_bio_skip(query: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Reg.photos)
     await query.answer()
     if query.message:
-        await query.message.edit_text(texts.ASK_BIO)
+        # Вопрос без кнопок выглядел бы сломанным — заменяем его на итог шага
+        await query.message.edit_text(texts.BIO_SKIPPED)
         await query.message.answer(texts.ASK_PHOTO)
 
 
@@ -344,11 +349,11 @@ async def step_photos_done(
 
 @router.callback_query(Reg.preview, RegCB.filter(F.action == "restart"))
 async def step_restart(query: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(Reg.name)
+    await state.set_state(Reg.gender)
     await state.update_data(reg_photos=[], reg_interests=[])
     await query.answer()
     if query.message:
-        await query.message.answer(texts.ASK_NAME)
+        await query.message.answer(texts.ASK_GENDER, reply_markup=inline.gender())
 
 
 @router.callback_query(Reg.preview, RegCB.filter(F.action == "publish"))
