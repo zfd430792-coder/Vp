@@ -7,7 +7,7 @@ from aiogram import Bot
 from aiogram.fsm.context import FSMContext
 
 from app import texts
-from app.constants import ROLE_MODERATOR
+from app.constants import MOD_HOLD, MOD_REJECTED, ROLE_MODERATOR
 from app.db import Database
 from app.keyboards import inline, reply
 from app.services import feed as feed_service
@@ -79,6 +79,20 @@ async def show_menu(
     await notify.send_message(bot, db, chat_id, text, reply_markup=markup)
 
 
+def own_profile_problem(profile: dict[str, Any]) -> str:
+    """Почему собственная анкета сейчас не показывается другим. Пусто — всё хорошо."""
+    if not profile.get("is_complete"):
+        return "анкета не дозаполнена"
+    if not profile.get("is_visible"):
+        return "показ поставлен на паузу в настройках"
+    moderation = profile.get("moderation")
+    if moderation == MOD_HOLD:
+        return "модератор скрыл её до проверки"
+    if moderation == MOD_REJECTED:
+        return "модератор её отклонил"
+    return ""
+
+
 async def show_next_profile(
     bot: Bot,
     db: Database,
@@ -95,10 +109,13 @@ async def show_next_profile(
 
     candidate = await feed_service.next_candidate(db, settings, user, profile)
     if candidate is None:
-        available = await feed_service.count_available(db, settings, user, profile)
-        text = texts.feed_empty_text(max(1, settings.get_int("pass_ttl_days", 14)))
-        if available:
-            text = texts.FEED_EMPTY_SHORT
+        reason, found = await feed_service.diagnose(db, settings, user, profile)
+        text = texts.feed_empty_text(
+            reason,
+            found,
+            max(1, settings.get_int("pass_ttl_days", 14)),
+            self_hidden=own_profile_problem(profile),
+        )
         message = await notify.send_message(
             bot, db, chat_id, text, reply_markup=inline.feed_empty()
         )

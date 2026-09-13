@@ -13,7 +13,6 @@ class Reg(StatesGroup):
     gender = State()
     seeking = State()
     city = State()
-    interests = State()
     bio = State()
     photos = State()
     preview = State()

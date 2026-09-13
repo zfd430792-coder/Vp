@@ -254,6 +254,25 @@ MIGRATIONS: list[list[str]] = [
         "UPDATE profiles SET search_radius = CASE WHEN only_my_city = 1 THEN 0 ELSE 999 END",
         "CREATE INDEX IF NOT EXISTS idx_profiles_geo ON profiles(lat, lon)",
     ],
+    # --- версия 6: чиним «анкета есть, а в поиске её нет» --------------------------
+    #
+    # Лента показывает только людей со статусом active, а статус ставился
+    # единственным местом — нажатием «Принимаю правила». Кто успел заполнить
+    # анкету, минуя этот экран, остался со статусом new: сам ленту видел, а его
+    # анкету не видел никто. Публикация анкеты теперь активирует сама, а здесь
+    # чиним тех, кто уже попал в эту яму.
+    [
+        """
+        UPDATE users
+           SET status = 'active'
+         WHERE status = 'new'
+           AND ban_permanent = 0
+           AND EXISTS (
+                 SELECT 1 FROM profiles p
+                  WHERE p.user_id = users.id AND p.is_complete = 1
+               )
+        """,
+    ],
 ]
 
 

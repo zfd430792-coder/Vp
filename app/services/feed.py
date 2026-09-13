@@ -12,12 +12,11 @@
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from app.constants import (
     ACT_PASS,
-    INTERESTS,
-    MAX_INTERESTS,
     MOD_OK,
     MOD_REVIEW,
     RADIUS_ANY,
@@ -36,10 +35,10 @@ DIST2 = (
     " + (p.lon - :my_lon) * (p.lon - :my_lon) * :cos2)"
 )
 
-_BASE_FILTERS = f"""
-        FROM profiles p
-        JOIN users u ON u.id = p.user_id
-       WHERE p.user_id != :me
+# Условия отбора держим по отдельности: так их можно включать по одному и
+# честно ответить человеку, какой именно фильтр обнулил ленту.
+_ALIVE = """
+         p.user_id != :me
          AND p.is_complete = 1
          AND p.is_visible = 1
          AND p.moderation IN (:mod_ok, :mod_review)
@@ -48,13 +47,22 @@ _BASE_FILTERS = f"""
          AND (u.ban_until IS NULL OR u.ban_until <= :now)
          AND u.bot_blocked = 0
          AND u.last_active_at > :inactive_cutoff
-         AND p.age BETWEEN :age_min AND :age_max
-         AND (:seeking = 'any' OR p.gender = :seeking)
+"""
+
+# Совпадение работает в обе стороны: ты подходишь человеку, а он тебе.
+_GENDER = """
+         (:seeking = 'any' OR p.gender = :seeking)
          AND (p.seeking = 'any' OR p.seeking = :my_gender)
+"""
+
+_AGE = """
+         p.age BETWEEN :age_min AND :age_max
          AND p.age_min <= :my_age
          AND p.age_max >= :my_age
-         AND (:only_verified = 0 OR u.verified = 1)
-         AND (
+"""
+
+_GEO = f"""
+         (
                :radius >= 999
             OR (:radius = 0 AND (:my_city = '' OR p.city_norm = :my_city))
             OR (
@@ -77,17 +85,49 @@ _BASE_FILTERS = f"""
                  )
                )
          )
-         AND NOT EXISTS (
+"""
+
+_VERIFIED = "(:only_verified = 0 OR u.verified = 1)"
+
+_UNSEEN = """
+         NOT EXISTS (
                 SELECT 1 FROM likes l
                  WHERE l.from_id = :me AND l.to_id = p.user_id
                    AND (l.action != :act_pass OR l.created_at > :pass_cutoff)
              )
-         AND NOT EXISTS (
+"""
+
+_NOT_BLOCKED = """
+         NOT EXISTS (
                 SELECT 1 FROM blocks b
                  WHERE (b.user_id = :me AND b.target_id = p.user_id)
                     OR (b.user_id = p.user_id AND b.target_id = :me)
              )
 """
+
+# Порядок важен: диагностика идёт сверху вниз и называет первый фильтр,
+# после которого не осталось никого.
+_STEPS: tuple[tuple[str, str], ...] = (
+    ("nobody", _ALIVE),
+    ("gender", _GENDER),
+    ("age", _AGE),
+    ("geo", _GEO),
+    ("verified", _VERIFIED),
+    ("seen", _UNSEEN),
+    ("blocked", _NOT_BLOCKED),
+)
+
+_FROM = """
+        FROM profiles p
+        JOIN users u ON u.id = p.user_id
+"""
+
+
+def _where(clauses: Sequence[str]) -> str:
+    return _FROM + "       WHERE " + " AND ".join(f"({c.strip()})" for c in clauses)
+
+
+_BASE_FILTERS = _where([clause for _name, clause in _STEPS])
 
 
 def _params(user: dict[str, Any], profile: dict[str, Any], settings: Settings) -> dict[str, Any]:
@@ -125,26 +165,13 @@ def _params(user: dict[str, Any], profile: dict[str, Any], settings: Settings) -
     }
 
 
-def _relevance(profile: dict[str, Any], params: dict[str, Any]) -> str:
-    """Выражение «насколько анкета подходит именно этому человеку».
+def _relevance() -> str:
+    """Небольшой вес подтверждённым и совсем новым анкетам.
 
-    Считает совпадения по интересам и добавляет небольшой вес подтверждённым
-    и совсем новым анкетам, чтобы новички не тонули в ленте.
+    Нужен, чтобы новички не тонули в ленте, а проверенные показывались выше.
     """
-    codes = [
-        code
-        for code in str(profile.get("interests") or "").split(",")
-        if code and code in INTERESTS
-    ]
-    terms: list[str] = []
-    for index, code in enumerate(codes[:MAX_INTERESTS]):
-        key = f"interest_{index}"
-        params[key] = f"%,{code},%"
-        terms.append(f"(CASE WHEN ',' || p.interests || ',' LIKE :{key} THEN 1 ELSE 0 END)")
-    interest_sum = " + ".join(terms) if terms else "0"
     return (
-        f"({interest_sum})"
-        " + (CASE WHEN u.verified = 1 THEN 2 ELSE 0 END)"
+        "(CASE WHEN u.verified = 1 THEN 2 ELSE 0 END)"
         " + (CASE WHEN u.created_at > :fresh_cutoff THEN 1 ELSE 0 END)"
     )
 
@@ -154,7 +181,7 @@ async def next_candidate(
 ) -> dict[str, Any] | None:
     """Возвращает следующую анкету для показа или None."""
     params = _params(user, profile, settings)
-    relevance = _relevance(profile, params)
+    relevance = _relevance()
     sql = f"""
         SELECT * FROM (
             SELECT p.*, u.username, u.last_active_at, u.trust_score, u.verified,
@@ -204,3 +231,26 @@ async def count_available(
     params.pop("fresh_cutoff", None)
     value = await db.fetchval(f"SELECT COUNT(*) {_BASE_FILTERS}", params, 0)
     return int(value)
+
+
+async def diagnose(
+    db: Database, settings: Settings, user: dict[str, Any], profile: dict[str, Any]
+) -> tuple[str, int]:
+    """Почему лента пустая.
+
+    Включает фильтры по одному и возвращает тот, после которого никого не
+    осталось, вместе с числом анкет, отсеянных именно им. «ok» — анкеты есть,
+    значит дело не в фильтрах, а в вероятности показа.
+    """
+    params = _params(user, profile, settings)
+    params.pop("fresh_cutoff", None)
+
+    clauses: list[str] = []
+    previous = 0
+    for name, clause in _STEPS:
+        clauses.append(clause)
+        count = int(await db.fetchval(f"SELECT COUNT(*) {_where(clauses)}", params, 0))
+        if count == 0:
+            return name, previous
+        previous = count
+    return "ok", previous

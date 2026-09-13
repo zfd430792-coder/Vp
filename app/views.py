@@ -7,7 +7,6 @@ from typing import Any
 from app import texts
 from app.constants import (
     GENDER_ICONS,
-    INTERESTS,
     MOD_HOLD,
     MOD_OK,
     MOD_REJECTED,
@@ -39,13 +38,6 @@ STATUS_LABELS = {
     STATUS_BANNED: "🚫 заблокирован",
     STATUS_DELETED: "🗑 анкета удалена",
 }
-
-
-def interests_line(codes: str | None) -> str:
-    if not codes:
-        return ""
-    names = [INTERESTS[code] for code in str(codes).split(",") if code in INTERESTS]
-    return " · ".join(names)
 
 
 def last_seen(ts: int | None) -> str:
@@ -94,9 +86,6 @@ def profile_caption(
         title += f" · {esc(distance)}"
     lines.append(title)
 
-    interests = interests_line(card.get("interests"))
-    if interests:
-        lines.append(f"<i>{esc(interests)}</i>")
 
     bio = (card.get("bio") or "").strip()
     if bio and bio_limit > 0:
@@ -235,8 +224,6 @@ def insights_text(
         tips.append("добавь второе фото — анкеты с одним снимком листают чаще")
     if len(str(card.get("bio") or "").strip()) < 30:
         tips.append("напиши пару строк о себе: с описанием отвечают заметно охотнее")
-    if not str(card.get("interests") or "").strip():
-        tips.append("выбери интересы — по ним проще найти общую тему")
     if not verified:
         tips.append("подтверди анкету селфи: галочка и +лайки к лимиту")
     if shown and rate < 10 and photos >= 1:
@@ -287,9 +274,6 @@ def admin_user_card(card: dict[str, Any], *, risk: int = 0, signals: Iterable[st
             f"{icon} <b>{esc(name)}</b>, {card.get('age') or '—'} · "
             f"📍 {esc(card.get('city') or '—')}"
         )
-        interests = interests_line(card.get("interests"))
-        if interests:
-            lines.append(f"<i>{esc(interests)}</i>")
         bio = (card.get("bio") or "").strip()
         if bio:
             lines.append(f"💬 {esc(shorten(bio, 300))}")

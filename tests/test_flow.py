@@ -426,23 +426,21 @@ async def main() -> None:
 
     print("\n▶ Релевантность ленты")
     await make_user(db, 2001, name="Ищущий", age=28, gender="m", seeking="f")
-    await profiles.update(db, 2001, interests="music,travel,sport", search_radius=0)
-    await make_user(db, 2002, name="Совпадает", age=26, gender="f", seeking="m")
-    await profiles.update(db, 2002, interests="music,travel,sport")
-    await make_user(db, 2003, name="Не совпадает", age=26, gender="f", seeking="m")
-    await profiles.update(db, 2003, interests="cars")
+    await profiles.update(db, 2001, search_radius=0)
+    await make_user(db, 2002, name="Обычная", age=26, gender="f", seeking="m")
+    await make_user(db, 2003, name="Подтверждённая", age=26, gender="f", seeking="m")
     for uid in (2001, 2002, 2003):
         await db.execute("UPDATE users SET last_active_at = ? WHERE id = ?", (now(), uid))
 
     seeker = await users.get(db, 2001)
     seeker_profile = await profiles.get(db, 2001)
-    picks = set()
+    await db.execute("UPDATE users SET verified = 1 WHERE id = ?", (2003,))
+    picks = []
     for _ in range(5):
         candidate = await feed.next_candidate(db, settings, seeker, seeker_profile)
-        picks.add(int(candidate["user_id"]) if candidate else 0)
-    check("общие интересы поднимают анкету", picks == {2002}, str(picks))
+        picks.append(int(candidate["user_id"]) if candidate else 0)
+    check("подтверждённая анкета показывается первой", set(picks) == {2003}, str(set(picks)))
 
-    await db.execute("UPDATE users SET verified = 1 WHERE id = ?", (2003,))
     await profiles.update(db, 2001, only_verified=1)
     seeker_profile = await profiles.get(db, 2001)
     verified_only = await feed.count_available(db, settings, seeker, seeker_profile)
@@ -581,6 +579,62 @@ async def main() -> None:
     deleted_user = await users.get(db, 1004)
     check("запись для истории осталась", deleted_user and deleted_user["status"] == "deleted")
     check("жалобы на аккаунт сохранились", await db.fetchval("SELECT COUNT(*) FROM reports WHERE reporter_id = 1004", (), 0) >= 0)
+
+    print("\n▶ Анкета видна другим, а не только владельцу")
+    # Ровно тот баг: статус ставился только экраном с правилами, и человек
+    # со статусом new сам ленту видел, а его анкету не видел никто.
+    # Возраст берём такой, какого нет у остальных участников теста: тогда эта
+    # пара видит только друг друга и проверки говорят именно о ней
+    await make_user(db, 1010, name="Лена", age=55, gender="f", seeking="m", search_radius=999)
+    await make_user(db, 1011, name="Пётр", age=56, gender="m", seeking="f", search_radius=999)
+    await profiles.update(db, 1010, age_min=50, age_max=60)
+    await profiles.update(db, 1011, age_min=50, age_max=60)
+    await db.execute("UPDATE users SET status = 'new' WHERE id = 1010")
+
+    stuck = await users.get(db, 1010)
+    stuck_profile = await profiles.get(db, 1010)
+    other = await users.get(db, 1011)
+    other_profile = await profiles.get(db, 1011)
+
+    check(
+        "застрявший сам ленту видит",
+        bool(await feed.next_candidate(db, settings, stuck, stuck_profile)),
+    )
+    check(
+        "но другим он не показывается",
+        await feed.next_candidate(db, settings, other, other_profile) is None,
+    )
+
+    await users.activate(db, 1010)
+    stuck = await users.get(db, 1010)
+    check("активация чинит видимость", stuck["status"] == "active")
+    check(
+        "теперь анкету видно",
+        bool(await feed.next_candidate(db, settings, other, other_profile)),
+    )
+    await users.activate(db, 1011)
+    check("повторная активация ничего не ломает", (await users.get(db, 1011))["status"] == "active")
+
+    print("\n▶ Пустая лента называет причину")
+    reason, found = await feed.diagnose(db, settings, other, other_profile)
+    check("когда анкеты есть — причина не в фильтрах", reason in {"ok", "seen"}, reason)
+
+    await profiles.update(db, 1011, age_min=70, age_max=80)
+    narrow = await profiles.get(db, 1011)
+    reason, found = await feed.diagnose(db, settings, other, narrow)
+    check("узкий возраст назван причиной", reason == "age", reason)
+    check("и сказано, сколько отсеяно", found >= 1, str(found))
+
+    await profiles.update(db, 1011, age_min=50, age_max=60, only_verified=1)
+    picky = await profiles.get(db, 1011)
+    reason, _ = await feed.diagnose(db, settings, other, picky)
+    check("фильтр «только проверенные» назван причиной", reason == "verified", reason)
+
+    await profiles.update(db, 1011, only_verified=0, seeking="m")
+    wrong = await profiles.get(db, 1011)
+    reason, _ = await feed.diagnose(db, settings, other, wrong)
+    check("несовпадение по полу названо причиной", reason == "gender", reason)
+    await profiles.update(db, 1011, seeking="f")
 
     await db.close()
 

@@ -10,7 +10,7 @@ from aiogram.types import CallbackQuery, Message
 from app import texts
 from app.callbacks import RegCB
 from app.config import Config
-from app.constants import MAX_INTERESTS, MAX_PHOTOS, MOD_HOLD, MOD_OK, MOD_REVIEW
+from app.constants import MAX_PHOTOS, MOD_HOLD, MOD_OK, MOD_REVIEW
 from app.db import Database
 from app.handlers import ui
 from app.keyboards import inline, reply
@@ -35,7 +35,6 @@ router = Router(name="registration")
 
 async def preload(state: FSMContext, profile: dict[str, Any]) -> None:
     """Переносит уже сохранённые поля анкеты в состояние диалога."""
-    interests = [code for code in str(profile.get("interests") or "").split(",") if code]
     await state.update_data(
         reg_name=profile.get("name"),
         reg_age=profile.get("age"),
@@ -43,7 +42,6 @@ async def preload(state: FSMContext, profile: dict[str, Any]) -> None:
         reg_seeking=profile.get("seeking"),
         reg_city=profile.get("city"),
         reg_bio=profile.get("bio") or "",
-        reg_interests=interests,
     )
 
 
@@ -140,11 +138,9 @@ async def step_seeking(query: CallbackQuery, callback_data: RegCB, state: FSMCon
         await query.message.edit_text(texts.ASK_AGE)
 
 
-async def ask_interests(message: Message, state: FSMContext) -> None:
-    await state.set_state(Reg.interests)
-    data = await state.get_data()
-    chosen = list(data.get("reg_interests") or [])
-    await message.answer(texts.ASK_INTERESTS, reply_markup=inline.interests(chosen))
+async def ask_bio(message: Message, state: FSMContext) -> None:
+    await state.set_state(Reg.bio)
+    await message.answer(texts.ASK_BIO, reply_markup=inline.skip_step("bio_skip"))
 
 
 async def save_city(
@@ -174,7 +170,7 @@ async def step_city_location(message: Message, state: FSMContext) -> None:
     await message.answer(
         texts.CITY_FROM_LOCATION.format(city=esc(city.title)), reply_markup=reply.remove
     )
-    await ask_interests(message, state)
+    await ask_bio(message, state)
 
 
 @router.message(Reg.city, F.text)
@@ -203,7 +199,7 @@ async def step_city(message: Message, state: FSMContext) -> None:
             texts.CITY_FREE.format(city=esc(resolution.name)), reply_markup=reply.remove
         )
 
-    await ask_interests(message, state)
+    await ask_bio(message, state)
 
 
 @router.callback_query(Reg.city, RegCB.filter(F.action == "city"))
@@ -218,35 +214,7 @@ async def step_city_pick(
     await save_city(state, name=city.name, lat=city.lat, lon=city.lon, source="city")
     await query.answer()
     await query.message.edit_text(texts.CITY_SET.format(city=esc(city.title)))
-    await ask_interests(query.message, state)
-
-
-@router.callback_query(Reg.interests, RegCB.filter(F.action == "interest"))
-async def step_interests(query: CallbackQuery, callback_data: RegCB, state: FSMContext) -> None:
-    data = await state.get_data()
-    chosen: list[str] = list(data.get("reg_interests") or [])
-    code = callback_data.value
-
-    if code in chosen:
-        chosen.remove(code)
-    elif len(chosen) >= MAX_INTERESTS:
-        await query.answer(f"Можно выбрать не больше {MAX_INTERESTS} тем", show_alert=True)
-        return
-    else:
-        chosen.append(code)
-
-    await state.update_data(reg_interests=chosen)
-    await query.answer()
-    if query.message:
-        await query.message.edit_reply_markup(reply_markup=inline.interests(chosen))
-
-
-@router.callback_query(Reg.interests, RegCB.filter(F.action == "interests_done"))
-async def step_interests_done(query: CallbackQuery, state: FSMContext) -> None:
-    await state.set_state(Reg.bio)
-    await query.answer()
-    if query.message:
-        await query.message.edit_text(texts.ASK_BIO, reply_markup=inline.skip_step("bio_skip"))
+    await ask_bio(query.message, state)
 
 
 @router.callback_query(Reg.bio, RegCB.filter(F.action == "bio_skip"))
@@ -332,7 +300,6 @@ async def step_photos_done(
         "age": data.get("reg_age"),
         "city": data.get("reg_city"),
         "bio": data.get("reg_bio") or "",
-        "interests": ",".join(data.get("reg_interests") or []),
         "photos": [{"file_id": item["file_id"]} for item in photos],
     }
     if query.message:
@@ -350,7 +317,7 @@ async def step_photos_done(
 @router.callback_query(Reg.preview, RegCB.filter(F.action == "restart"))
 async def step_restart(query: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(Reg.gender)
-    await state.update_data(reg_photos=[], reg_interests=[])
+    await state.update_data(reg_photos=[])
     await query.answer()
     if query.message:
         await query.message.answer(texts.ASK_GENDER, reply_markup=inline.gender())
@@ -390,7 +357,6 @@ async def step_publish(
         lon=data.get("reg_lon"),
         geo_source=data.get("reg_geo"),
         bio=data.get("reg_bio") or "",
-        interests=",".join(data.get("reg_interests") or []),
         is_visible=1,
         moderation=MOD_OK,
         moderation_note=None,
@@ -402,6 +368,10 @@ async def step_publish(
         await antifraud.screen_photo(db, user_id, item["unique"])
 
     await profiles_service.mark_complete(db, user_id)
+    # Опубликовал анкету — значит, человек полноценный участник и должен
+    # попадать в чужие ленты. Раньше это зависело только от экрана с правилами,
+    # и анкета могла остаться невидимой для всех, кроме самого владельца.
+    await users_service.activate(db, user_id)
     profile = await profiles_service.get(db, user_id)
     status, reasons = await antifraud.screen_profile(db, user_id, profile or {})
     if status != MOD_OK:
@@ -467,7 +437,6 @@ async def step_photo_needed(message: Message) -> None:
 
 @router.message(Reg.gender)
 @router.message(Reg.seeking)
-@router.message(Reg.interests)
 @router.message(Reg.preview)
 async def step_use_buttons(message: Message) -> None:
     await message.answer("Выбери вариант кнопкой выше 👆")

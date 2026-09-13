@@ -123,6 +123,60 @@ def text_constants() -> list[tuple[str, str]]:
     return sorted(found)
 
 
+def check_migration() -> None:
+    """База предыдущей версии должна ожить после обновления кода.
+
+    Проверяем починку статусов: анкеты, заполненные в обход экрана с правилами,
+    оставались со статусом new и не показывались никому.
+    """
+    import asyncio
+    import tempfile
+
+    from app.db import base
+    from app.db.base import Database
+    from app.db.schema import MIGRATIONS
+
+    full = list(MIGRATIONS)
+    if len(full) < 6:
+        check("миграция статусов есть в списке", False, f"версий всего {len(full)}")
+        return
+
+    async def run() -> list[tuple[int, str]]:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "old.db"
+            base.MIGRATIONS = full[:5]  # база, созданная прошлой версией бота
+            old_db = Database(path)
+            await old_db.connect()
+            rows = ((1, 1, 0), (2, 0, 0), (3, 1, 1))  # анкета готова / нет / бан
+            for user_id, complete, banned in rows:
+                await old_db.execute(
+                    "INSERT INTO users (id, created_at, last_active_at, status, ban_permanent)"
+                    " VALUES (?, 0, 0, 'new', ?)",
+                    (user_id, banned),
+                )
+                await old_db.execute(
+                    "INSERT INTO profiles (user_id, is_complete, updated_at) VALUES (?, ?, 0)",
+                    (user_id, complete),
+                )
+            await old_db.close()
+
+            base.MIGRATIONS = full  # обновились
+            new_db = Database(path)
+            await new_db.connect()
+            found = await new_db.fetchall("SELECT id, status FROM users ORDER BY id")
+            await new_db.close()
+            return [(int(r["id"]), str(r["status"])) for r in found]
+
+    try:
+        statuses = dict(asyncio.run(run()))
+    finally:
+        base.MIGRATIONS = full
+
+    check("анкета без статуса стала видимой", statuses.get(1) == "active", str(statuses))
+    check("незаполненную анкету не трогаем", statuses.get(2) == "new", str(statuses))
+    check("заблокированного не разблокируем", statuses.get(3) == "new", str(statuses))
+
+
 def main() -> int:
     print("\n▶ Все файлы кода лежат в git")
     tracked = tracked_files()
@@ -144,6 +198,9 @@ def main() -> int:
             check(name, False, f"{type(error).__name__}: {error}")
         else:
             check(name, True)
+
+    print("\n▶ Старая база чинится при обновлении")
+    check_migration()
 
     print("\n▶ Разметка текстов понятна Telegram")
     broken = [(name, html_problem(value)) for name, value in text_constants()]

@@ -13,7 +13,6 @@ BIO_MAX_LEN = 400
 CITY_MAX_LEN = 40
 MAX_PHOTOS = 3
 MIN_PHOTOS = 1
-MAX_INTERESTS = 5
 
 # Уровни доступа
 ROLE_USER = 0
@@ -94,6 +93,7 @@ RADIUS_CHOICES: tuple[tuple[int, str], ...] = (
     (RADIUS_ANY, "без ограничений"),
 )
 
+# Остался только ради выгрузки данных: выбирать интересы в боте больше негде
 INTERESTS: dict[str, str] = {
     "music": "🎧 Музыка",
     "movies": "🎬 Кино",

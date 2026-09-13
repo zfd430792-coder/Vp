@@ -1,7 +1,7 @@
 """Инлайн-клавиатуры."""
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -21,7 +21,6 @@ from app.callbacks import (
 from app.constants import (
     GENDER_ICONS,
     GENDERS,
-    INTERESTS,
     RADIUS_CHOICES,
     REPORT_CATEGORIES,
     ROLE_NAMES,
@@ -85,26 +84,6 @@ def seeking(prefix: str = "reg") -> InlineKeyboardMarkup:
         else:
             builder.button(text=title, callback_data=SettingsCB(action="seeking", value=code))
     builder.adjust(3)
-    return builder.as_markup()
-
-
-def interests(selected: Iterable[str], *, editing: bool = False) -> InlineKeyboardMarkup:
-    chosen = set(selected)
-    builder = InlineKeyboardBuilder()
-    action = "edit_interest" if editing else "interest"
-    for code, title in INTERESTS.items():
-        mark = "✅ " if code in chosen else ""
-        builder.button(
-            text=f"{mark}{title}",
-            callback_data=(ProfileCB(action=action, value=code) if editing else RegCB(action=action, value=code)),
-        )
-    builder.adjust(2)
-    done = (
-        ProfileCB(action="interests_done")
-        if editing
-        else RegCB(action="interests_done")
-    )
-    builder.row(InlineKeyboardButton(text="➡️ Готово", callback_data=done.pack()))
     return builder.as_markup()
 
 
@@ -321,7 +300,6 @@ def profile_menu(
     builder.button(text="🏷 Имя", callback_data=ProfileCB(action="name"))
     builder.button(text="🎂 Возраст", callback_data=ProfileCB(action="age"))
     builder.button(text="📍 Город", callback_data=ProfileCB(action="city"))
-    builder.button(text="🎯 Интересы", callback_data=ProfileCB(action="interests"))
     builder.button(text="📊 Статистика анкеты", callback_data=ProfileCB(action="insights"))
     builder.button(text="❤️ Мой лимит лайков", callback_data=ProfileCB(action="limits"))
     if not verified:

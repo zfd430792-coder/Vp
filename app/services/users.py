@@ -94,6 +94,19 @@ async def accept_rules(db: Database, user_id: int) -> None:
     )
 
 
+async def activate(db: Database, user_id: int) -> None:
+    """Делает человека видимым в поиске.
+
+    Лента отбирает только активных, поэтому анкета без этого статуса не
+    показывается никому — при том, что сам человек ленту прекрасно видит.
+    Заблокированных не трогаем: снятие бана — отдельное решение модератора.
+    """
+    await db.execute(
+        "UPDATE users SET status = ? WHERE id = ? AND status = ?",
+        (STATUS_ACTIVE, user_id, STATUS_NEW),
+    )
+
+
 async def set_captcha_passed(db: Database, user_id: int, passed: bool = True) -> None:
     await db.execute(
         "UPDATE users SET captcha_passed = ? WHERE id = ?", (1 if passed else 0, user_id)

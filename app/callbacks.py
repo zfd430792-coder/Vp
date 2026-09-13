@@ -31,7 +31,7 @@ class MatchCB(CallbackData, prefix="mt"):
 
 
 class ProfileCB(CallbackData, prefix="pf"):
-    action: str            # menu | name | age | gender | seeking | city | bio | interests |
+    action: str            # menu | name | age | gender | seeking | city | bio |
                            # photos | photo_add | photo_del | pause | resume | delete | confirm_delete
     value: str = ""
 

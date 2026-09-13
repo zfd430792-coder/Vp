@@ -14,7 +14,6 @@ from app.config import Config
 from app.constants import (
     BIO_MAX_LEN,
     BONUS_VERIFIED,
-    MAX_INTERESTS,
     MAX_PHOTOS,
     MOD_HOLD,
     VERIFY_PENDING,
@@ -575,63 +574,6 @@ async def save_bio(
 
 
 # --------------------------------------------------------------------------- интересы
-
-
-@router.callback_query(ProfileCB.filter(F.action == "interests"))
-async def edit_interests(
-    query: CallbackQuery, db: Database, user: dict[str, Any]
-) -> None:
-    profile = await profiles_service.get(db, int(user["id"]))
-    chosen = [code for code in str((profile or {}).get("interests") or "").split(",") if code]
-    await query.answer()
-    if query.message:
-        await query.message.answer(
-            f"🎯 Выбери до {MAX_INTERESTS} тем:",
-            reply_markup=inline.interests(chosen, editing=True),
-        )
-
-
-@router.callback_query(ProfileCB.filter(F.action == "edit_interest"))
-async def toggle_interest(
-    query: CallbackQuery, callback_data: ProfileCB, db: Database, user: dict[str, Any]
-) -> None:
-    user_id = int(user["id"])
-    profile = await profiles_service.get(db, user_id)
-    chosen = [code for code in str((profile or {}).get("interests") or "").split(",") if code]
-    code = callback_data.value
-
-    if code in chosen:
-        chosen.remove(code)
-    elif len(chosen) >= MAX_INTERESTS:
-        await query.answer(f"Не больше {MAX_INTERESTS} тем", show_alert=True)
-        return
-    else:
-        chosen.append(code)
-
-    await profiles_service.update(db, user_id, interests=",".join(chosen))
-    await query.answer()
-    if query.message:
-        await query.message.edit_reply_markup(
-            reply_markup=inline.interests(chosen, editing=True)
-        )
-
-
-@router.callback_query(ProfileCB.filter(F.action == "interests_done"))
-async def interests_done(
-    query: CallbackQuery,
-    bot: Bot,
-    state: FSMContext,
-    db: Database,
-    settings: Settings,
-    user: dict[str, Any],
-) -> None:
-    await query.answer("Сохранено")
-    if query.message:
-        await query.message.delete()
-        await show_profile(bot, db, settings, state, query.message.chat.id, user)
-
-
-# --------------------------------------------------------------------------- пауза
 
 
 @router.callback_query(ProfileCB.filter(F.action.in_({"pause", "resume"})))
